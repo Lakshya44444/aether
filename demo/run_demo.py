@@ -31,7 +31,7 @@ from src.detectors.privacy import PrivacyDetector
 from src.detectors.bias import BiasDetector
 from src.detectors.cost import CostDetector
 from src.input_guardrail.guardrail import InputGuardrail
-from src.risk_fabric.action_impact import get_action_profile, compute_action_risk_multiplier
+from src.risk_fabric.action_impact import get_action_profile, get_impact_class
 from src.risk_fabric.session_tracker import SessionTracker
 from src.policy_engine.engine import PolicyEngine
 from src.verification_router.router import VerificationRouter
