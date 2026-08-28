@@ -1,7 +1,7 @@
 {
   "policy_id": "finance_agent_v1",
   "use_case": "finance_agent",
-  "risk_tier": "unacceptable",
+  "risk_tier": "high",
   "fail_mode": "fail_closed",
   "thresholds": {
     "factuality": {
