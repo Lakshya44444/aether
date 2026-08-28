@@ -1,15 +1,25 @@
+import asyncio
+import hashlib
 import json
-import sqlite3
 import aiosqlite
 from typing import Optional, List
 from src.models.schemas import DecisionTrace, DashboardStats
 from src.config import config
 
+_GENESIS = "0" * 64
+
+
 class AuditLogger:
-    """Decision Trace + SQLite audit log (Section 5.8)."""
-    
+    """Decision Trace + SQLite audit log (Section 5.8).
+
+    Rows are hash-chained: each row stores the hash of the previous row together with
+    its own content. SQLite cannot prevent an UPDATE or DELETE, so tamper-evidence is
+    provided instead of a claim of immutability the storage layer cannot keep.
+    """
+
     def __init__(self):
         self.db_path = config.audit_db_path
+        self._chain_lock = asyncio.Lock()
         
     async def init_db(self):
         """Create SQLite table if not exists."""
@@ -25,27 +35,73 @@ class AuditLogger:
                     human_reviewed INTEGER DEFAULT 0,
                     review_approved INTEGER DEFAULT NULL,
                     reviewer_id TEXT DEFAULT NULL,
-                    review_reason TEXT DEFAULT NULL
+                    review_reason TEXT DEFAULT NULL,
+                    prev_hash TEXT NOT NULL DEFAULT '',
+                    row_hash TEXT NOT NULL DEFAULT ''
                 );
             ''')
+            await db.execute(
+                'CREATE INDEX IF NOT EXISTS idx_traces_ts ON decision_traces(timestamp DESC)'
+            )
             await db.commit()
 
-    async def log_trace(self, trace: DecisionTrace):
-        """Insert immutable row."""
+    @staticmethod
+    def _hash_row(prev_hash: str, trace_json: str) -> str:
+        return hashlib.sha256(f"{prev_hash}{trace_json}".encode("utf-8")).hexdigest()
+
+    async def _last_hash(self, db) -> str:
+        async with db.execute(
+            'SELECT row_hash FROM decision_traces ORDER BY rowid DESC LIMIT 1'
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row and row[0] else _GENESIS
+
+    async def verify_chain(self):
+        """Recomputes the chain and reports the first row that does not match.
+
+        Returns (ok, checked, first_bad_trace_id).
+        """
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                INSERT INTO decision_traces (
-                    trace_id, timestamp, session_id, use_case, decision, trace_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                trace.trace_id,
-                trace.timestamp.isoformat(),
-                trace.session_id,
-                trace.use_case.value,
-                trace.decision.value,
-                trace.model_dump_json()
-            ))
-            await db.commit()
+            async with db.execute(
+                'SELECT trace_id, trace_json, prev_hash, row_hash '
+                'FROM decision_traces ORDER BY rowid ASC'
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        expected_prev = _GENESIS
+        for trace_id, trace_json, prev_hash, row_hash in rows:
+            if prev_hash != expected_prev:
+                return False, len(rows), trace_id
+            if self._hash_row(prev_hash, trace_json) != row_hash:
+                return False, len(rows), trace_id
+            expected_prev = row_hash
+        return True, len(rows), None
+
+    async def log_trace(self, trace: DecisionTrace):
+        """Appends a tamper-evident row linked to the one before it."""
+        trace_json = trace.model_dump_json()
+        # Serialised so two concurrent requests cannot read the same tail hash and
+        # write two rows claiming the same predecessor.
+        async with self._chain_lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                prev_hash = await self._last_hash(db)
+                row_hash = self._hash_row(prev_hash, trace_json)
+                await db.execute('''
+                    INSERT INTO decision_traces (
+                        trace_id, timestamp, session_id, use_case, decision,
+                        trace_json, prev_hash, row_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    trace.trace_id,
+                    trace.timestamp.isoformat(),
+                    trace.session_id,
+                    trace.use_case.value,
+                    trace.decision.value,
+                    trace_json,
+                    prev_hash,
+                    row_hash,
+                ))
+                await db.commit()
 
     async def get_trace(self, trace_id: str) -> Optional[DecisionTrace]:
         """Get specific trace."""
@@ -76,33 +132,61 @@ class AuditLogger:
             await db.commit()
 
     async def get_stats(self) -> DashboardStats:
-        """Get dashboard stats."""
+        """Aggregates dashboard statistics from reviewed and unreviewed traces."""
         stats = DashboardStats()
         async with aiosqlite.connect(self.db_path) as db:
-            # Basic counts
-            async with db.execute('SELECT COUNT(*), AVG(json_extract(trace_json, "$.total_latency_ms")) FROM decision_traces') as cursor:
+            async with db.execute(
+                'SELECT COUNT(*), AVG(json_extract(trace_json, "$.total_latency_ms")) '
+                'FROM decision_traces'
+            ) as cursor:
                 row = await cursor.fetchone()
                 if row and row[0]:
                     stats.total_evaluations = row[0]
                     stats.avg_latency_ms = row[1] or 0.0
 
-            # Decisions
-            async with db.execute('SELECT decision, COUNT(*) FROM decision_traces GROUP BY decision') as cursor:
+            async with db.execute(
+                'SELECT decision, COUNT(*) FROM decision_traces GROUP BY decision'
+            ) as cursor:
                 async for row in cursor:
                     stats.decisions[row[0]] = row[1]
-                    
-            # Human reviews (FP / FN)
-            async with db.execute('SELECT review_approved, COUNT(*) FROM decision_traces WHERE human_reviewed = 1 GROUP BY review_approved') as cursor:
-                async for row in cursor:
-                    if row[0] == 1: # approved despite being blocked/escalated -> FP
-                        stats.false_positive_count += row[1]
-                    else: # not approved, so the block was justified, or it's a FN if allowed? 
-                        pass # Simplified for demo
 
-            # Recent traces
+            # A reviewer approving something Sentinel stopped means Sentinel was wrong
+            # to stop it: a false positive. A reviewer rejecting something Sentinel let
+            # through means it should have been caught: a false negative. Anything else
+            # is a confirmed decision.
+            stopped = ("BLOCK", "ESCALATE", "REDACT", "WARN")
+            confirmed_alerts = 0
+            reviewed_alerts = 0
+            async with db.execute(
+                'SELECT decision, review_approved, COUNT(*) FROM decision_traces '
+                'WHERE human_reviewed = 1 GROUP BY decision, review_approved'
+            ) as cursor:
+                async for decision, approved, count in cursor:
+                    was_alert = decision in stopped
+                    if was_alert:
+                        reviewed_alerts += count
+                    if approved == 1:
+                        if was_alert:
+                            stats.false_positive_count += count
+                        # An allowed response the reviewer also approves is simply correct.
+                    else:
+                        if was_alert:
+                            confirmed_alerts += count
+                        else:
+                            stats.false_negative_count += count
+
             stats.recent_traces = await self.get_recent_traces(10)
-            
-            if stats.total_evaluations > 0:
-                stats.alert_to_incident_rate = (stats.decisions.get("BLOCK", 0) + stats.decisions.get("ESCALATE", 0)) / stats.total_evaluations
+
+            # Alert-to-incident conversion is the share of raised alerts a human
+            # confirms as genuine — not the share of traffic that raised an alert,
+            # which is the alert rate and a different number entirely.
+            if reviewed_alerts:
+                stats.alert_to_incident_rate = confirmed_alerts / reviewed_alerts
+
+            for trace in stats.recent_traces:
+                for result in trace.detection_results:
+                    if result.flagged:
+                        key = result.category.value
+                        stats.risk_distribution[key] = stats.risk_distribution.get(key, 0) + 1
 
         return stats

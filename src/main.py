@@ -255,6 +255,13 @@ async def submit_review(request: HumanReviewRequest):
         feedback_logged=True
     )
 
+@app.get("/api/audit/verify")
+async def verify_audit_chain():
+    """Recomputes the audit hash chain and reports the first row that fails."""
+    ok, checked, first_bad = await audit_logger.verify_chain()
+    return {"intact": ok, "rows_checked": checked, "first_invalid_trace_id": first_bad}
+
+
 @app.get("/api/stats", response_model=DashboardStats)
 async def get_stats():
     return await audit_logger.get_stats()
