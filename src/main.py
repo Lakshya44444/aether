@@ -150,9 +150,8 @@ async def evaluate(request: EvaluationRequest):
     # 6. Attempt Correction if BLOCK or ESCALATE
     correction_result = None
     corrected_output = request.output_text
-    
-    if decision in (Decision.BLOCK, Decision.ESCALATE, Decision.REDACT):
-        # Gather flagged spans by category
+
+    if decision in (Decision.BLOCK, Decision.ESCALATE) and not failed_detectors:
         fact_spans = []
         bias_spans = []
         for res in valid_results:
@@ -161,20 +160,55 @@ async def evaluate(request: EvaluationRequest):
                     fact_spans.extend(res.flagged_spans)
                 elif res.category.value == "bias":
                     bias_spans.extend(res.flagged_spans)
-                    
-        # Apply corrections
+
+        attempted = None
         if fact_spans:
-            c_res = await cove_reviser.revise(corrected_output, fact_spans, request.context_documents)
-            if c_res.succeeded:
-                corrected_output = c_res.corrected_text
-                correction_result = c_res
-                
+            attempted = await cove_reviser.revise(
+                corrected_output, fact_spans, request.context_documents
+            )
         if bias_spans:
-            b_res = await bias_resampler.resample(corrected_output, bias_spans)
-            if b_res.succeeded:
-                corrected_output = b_res.corrected_text
-                correction_result = b_res
-                
+            base = attempted.corrected_text if attempted and attempted.succeeded else corrected_output
+            attempted = await bias_resampler.resample(base, bias_spans)
+
+        # A corrector reporting its own success proves nothing. The revised text is put
+        # back through the same detectors and the same policy, and the correction is
+        # only accepted if that second pass genuinely lands on a softer decision.
+        if attempted and attempted.succeeded and attempted.corrected_text != corrected_output:
+            recheck = await asyncio.gather(
+                factuality_detector.detect(
+                    request.input_text, attempted.corrected_text,
+                    depth=depth, context_documents=request.context_documents,
+                ),
+                privacy_detector.detect(request.input_text, attempted.corrected_text),
+                bias_detector.detect(request.input_text, attempted.corrected_text),
+                return_exceptions=True,
+            )
+            recheck_results = [r for r in recheck if not isinstance(r, Exception)]
+            if len(recheck_results) == 3:
+                recheck_assessment = risk_assessment.model_copy(
+                    update={"detection_results": recheck_results}
+                )
+                new_decision, new_reason, _ = policy_engine.evaluate(recheck_assessment)
+                if _SEVERITY[new_decision] < _SEVERITY[decision]:
+                    corrected_output = attempted.corrected_text
+                    attempted.details = {
+                        **attempted.details,
+                        "decision_before": decision.value,
+                        "decision_after": new_decision.value,
+                        "verified_by_recheck": True,
+                    }
+                    correction_result = attempted
+                    decision = new_decision
+                    reason = f"{reason}; corrected and re-verified -> {new_reason}"
+                else:
+                    attempted.succeeded = False
+                    attempted.details = {
+                        **attempted.details,
+                        "verified_by_recheck": False,
+                        "note": "correction did not lower the decision; original stands",
+                    }
+                    correction_result = attempted
+
     # A REDACT decision has to actually mask something. The privacy detector already
     # reports exact offsets, so the masked text is what the caller receives.
     if decision == Decision.REDACT:
