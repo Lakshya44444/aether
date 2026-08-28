@@ -39,6 +39,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_SEVERITY = {
+    Decision.ALLOW: 0,
+    Decision.WARN: 1,
+    Decision.REDACT: 2,
+    Decision.ESCALATE: 3,
+    Decision.BLOCK: 4,
+}
+
 # Initialize components
 session_tracker = SessionTracker()
 policy_engine = PolicyEngine(config.policies_dir)
@@ -71,6 +79,7 @@ async def evaluate(request: EvaluationRequest):
     depth = verification_router.route(request.use_case, request.action, risk_tier)
     
     # 3. Run Detectors in Parallel
+    detector_names = ["factuality", "privacy", "bias", "cost"]
     detectors_tasks = [
         factuality_detector.detect(request.input_text, request.output_text, depth=depth),
         privacy_detector.detect(request.input_text, request.output_text),
@@ -78,11 +87,13 @@ async def evaluate(request: EvaluationRequest):
         cost_detector.detect(request.input_text, request.output_text)
     ]
     detection_results = await asyncio.gather(*detectors_tasks, return_exceptions=True)
-    
-    # Filter out exceptions if fail-open logic is implemented in policy engine,
-    # or just keep successful ones
+
     valid_results = [res for res in detection_results if not isinstance(res, Exception)]
-    
+    failed_detectors = [
+        name for name, res in zip(detector_names, detection_results)
+        if isinstance(res, Exception)
+    ]
+
     # 4. Build Risk Assessment
     impact, reversibility = get_action_profile(request.action)
     turn_risk, session_exposure, trajectory = session_tracker.update(
@@ -105,7 +116,23 @@ async def evaluate(request: EvaluationRequest):
     # 5. Run Policy Engine
     decision, reason, policy_id = policy_engine.evaluate(risk_assessment)
     fail_mode = policy_config.get("fail_mode", "fail_closed")
-    
+
+    # A detector that raised produced no signal. Treating that as "nothing found" turns
+    # every crash into a silent ALLOW, so the policy's declared fail mode is applied here
+    # and the failure is recorded on the trace rather than being swallowed.
+    if failed_detectors:
+        failure_note = f"detector(s) failed: {', '.join(failed_detectors)}"
+        if fail_mode == "fail_open":
+            if decision == Decision.ALLOW:
+                decision = Decision.WARN
+                reason = f"{failure_note}; fail_open -> WARN"
+            else:
+                reason = f"{reason}; {failure_note}"
+        else:
+            if _SEVERITY[decision] < _SEVERITY[Decision.BLOCK]:
+                decision = Decision.BLOCK
+            reason = f"{failure_note}; fail_closed -> BLOCK"
+
     # 6. Attempt Correction if BLOCK or ESCALATE
     correction_result = None
     corrected_output = request.output_text
@@ -154,6 +181,7 @@ async def evaluate(request: EvaluationRequest):
         reason=reason,
         correction=correction_result,
         fail_mode=fail_mode,
+        failed_detectors=failed_detectors,
         total_latency_ms=latency_ms
     )
     await audit_logger.log_trace(trace)

@@ -201,6 +201,7 @@ class DecisionTrace(BaseModel):
     reason: str
     correction: Optional[CorrectionResult] = None
     fail_mode: str = ""
+    failed_detectors: List[str] = []
     total_latency_ms: float = 0.0
 
 
