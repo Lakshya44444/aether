@@ -1,5 +1,5 @@
 from typing import Dict, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 
 from src.models.schemas import UseCase, DetectionResult, Trajectory, SessionInfo
@@ -13,11 +13,22 @@ class SessionState(BaseModel):
     trajectory: Trajectory = Trajectory.STABLE
     risk_history: List[float] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_seen: datetime = Field(default_factory=datetime.utcnow)
 
 class SessionTracker:
     def __init__(self):
         self.sessions: Dict[str, SessionState] = {}
-        self.trajectory_window = config.trajectory_window_turns
+        self.trajectory_window = max(2, config.trajectory_window_turns)
+
+    def _evict_stale(self) -> None:
+        """Drops sessions idle past the configured timeout.
+
+        Both this map and the cost detector's were unbounded process-local dicts, so a
+        long-running gateway retained every session it had ever seen.
+        """
+        cutoff = datetime.utcnow() - timedelta(minutes=config.session_timeout_minutes)
+        for sid in [s for s, st in self.sessions.items() if st.last_seen < cutoff]:
+            del self.sessions[sid]
 
     def update(self, session_id: str, use_case: UseCase, detection_results: List[DetectionResult]) -> Tuple[float, float, Trajectory]:
         """Updates session state and returns (current_turn_risk, session_exposure, trajectory).
@@ -26,10 +37,13 @@ class SessionTracker:
         It is damped so a single risky turn does not immediately dominate a low-risk workflow, while repeated
         risky turns gradually push a session into a stricter control regime.
         """
+        self._evict_stale()
+
         if session_id not in self.sessions:
             self.sessions[session_id] = SessionState(session_id=session_id, use_case=use_case)
 
         session = self.sessions[session_id]
+        session.last_seen = datetime.utcnow()
 
         # current_turn_risk: max of all detection scores for this turn
         current_turn_risk = 0.0
@@ -37,6 +51,7 @@ class SessionTracker:
             current_turn_risk = max([dr.score for dr in detection_results] + [0.0])
 
         session.risk_history.append(current_turn_risk)
+        del session.risk_history[: -2 * self.trajectory_window]
         session.turn_count += 1
 
         # Damped governance heuristic: a single high-risk turn should raise exposure, but not instantly exhaust
@@ -49,11 +64,12 @@ class SessionTracker:
         # compute trajectory using a sliding window
         trajectory = Trajectory.STABLE
 
-        if len(session.risk_history) >= 6:
-            recent_3 = session.risk_history[-3:]
-            prev_3 = session.risk_history[-6:-3]
-            avg_recent = sum(recent_3) / 3.0
-            avg_prev = sum(prev_3) / 3.0
+        window = self.trajectory_window
+        if len(session.risk_history) >= 2 * window:
+            recent = session.risk_history[-window:]
+            prev = session.risk_history[-2 * window:-window]
+            avg_recent = sum(recent) / window
+            avg_prev = sum(prev) / window
 
             if avg_recent > avg_prev + 0.05:
                 trajectory = Trajectory.RISING

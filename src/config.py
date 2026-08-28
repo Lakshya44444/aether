@@ -41,7 +41,7 @@ class SentinelConfig(BaseSettings):
     # ── Session Tracking ─────────────────────────────────────────
     max_session_exposure: float = 1.0
     session_timeout_minutes: int = 30
-    trajectory_window_turns: int = 5
+    trajectory_window_turns: int = 3
 
     # ── Audit / Storage ──────────────────────────────────────────
     audit_db_path: str = "sentinel_audit.db"

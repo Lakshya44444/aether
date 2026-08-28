@@ -92,11 +92,19 @@ async def evaluate(request: EvaluationRequest):
             model_name=request.model_name,
         )
     ]
-    detection_results = await asyncio.gather(*detectors_tasks, return_exceptions=True)
+    # The policy's latency budget is enforced, not merely documented. A detector that
+    # overruns is treated exactly like one that raised: it produced no signal, so the
+    # declared fail mode decides what happens rather than the absence of a flag.
+    budget_s = policy_config.get("latency_budget_ms", config.deep_latency_budget_ms) / 1000
+    detection_results = await asyncio.gather(
+        *[asyncio.wait_for(task, timeout=budget_s) for task in detectors_tasks],
+        return_exceptions=True,
+    )
 
     valid_results = [res for res in detection_results if not isinstance(res, Exception)]
     failed_detectors = [
-        name for name, res in zip(detector_names, detection_results)
+        f"{name} (timeout)" if isinstance(res, asyncio.TimeoutError) else name
+        for name, res in zip(detector_names, detection_results)
         if isinstance(res, Exception)
     ]
 
