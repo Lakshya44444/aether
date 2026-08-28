@@ -1,0 +1,16 @@
+{
+  "policy_id": "customer_support_v1",
+  "use_case": "customer_support",
+  "risk_tier": "limited",
+  "fail_mode": "fail_open",
+  "thresholds": {
+    "factuality": {"warn": 0.65, "block": 1.2},
+    "privacy": {"warn": 0.2, "block": 0.5},
+    "bias": {"warn": 0.4, "block": 0.7},
+    "cost": {"warn": 0.5, "block": 0.9}
+  },
+  "mandatory_human_review_actions": ["delete_record", "execute_payment"],
+  "max_session_exposure": 0.8,
+  "pii_handling": "redact",
+  "latency_budget_ms": 300
+}

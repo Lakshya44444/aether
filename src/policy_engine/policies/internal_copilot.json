@@ -1,0 +1,16 @@
+{
+  "policy_id": "internal_copilot_v1",
+  "use_case": "internal_copilot",
+  "risk_tier": "high",
+  "fail_mode": "fail_closed",
+  "thresholds": {
+    "factuality": {"warn": 0.75, "block": 1.7},
+    "privacy": {"warn": 0.1, "block": 0.3},
+    "bias": {"warn": 0.4, "block": 0.7},
+    "cost": {"warn": 0.5, "block": 0.9}
+  },
+  "mandatory_human_review_actions": ["send_email", "update_crm", "delete_record", "execute_payment"],
+  "max_session_exposure": 0.8,
+  "pii_handling": "redact",
+  "latency_budget_ms": 500
+}

@@ -1,0 +1,16 @@
+{
+  "policy_id": "finance_agent_v1",
+  "use_case": "finance_agent",
+  "risk_tier": "unacceptable",
+  "fail_mode": "fail_closed",
+  "thresholds": {
+    "factuality": {"warn": 0.1, "block": 0.7},
+    "privacy": {"warn": 0.1, "block": 0.3},
+    "bias": {"warn": 0.2, "block": 0.5},
+    "cost": {"warn": 0.3, "block": 0.7}
+  },
+  "mandatory_human_review_actions": ["send_email", "update_crm", "delete_record", "execute_payment"],
+  "max_session_exposure": 0.5,
+  "pii_handling": "block",
+  "latency_budget_ms": 1000
+}
