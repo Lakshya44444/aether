@@ -20,6 +20,9 @@ class SentinelConfig(BaseSettings):
     llm_api_base: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
     judge_model: str = "gpt-4o-mini"  # Never the generating model
+    judge_max_tokens: int = 256
+    judge_samples: int = 3
+    judge_timeout_s: float = 5.0
 
     # ── Latency Budgets (ms) — Section 5.3, Table ────────────────
     shallow_latency_budget_ms: int = 200   # Galileo Luna-2 class
@@ -27,7 +30,8 @@ class SentinelConfig(BaseSettings):
     deep_latency_budget_ms: int = 1000     # Patronus Glider class
 
     # ── Detection Thresholds (defaults, overridable per policy) ──
-    factuality_threshold: float = 0.6
+    factuality_threshold: float = 0.35
+    evidence_overlap_threshold: float = 0.45
     privacy_threshold: float = 0.3
     bias_threshold: float = 0.5
     cost_warn_usd: float = 0.50
