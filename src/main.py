@@ -10,7 +10,7 @@ from src.models.schemas import (
     InputGuardrailRequest, InputGuardrailResponse,
     HumanReviewRequest, HumanReviewResponse,
     DecisionTrace, RiskAssessment, Decision,
-    DashboardStats, RiskTier, UseCase
+    DashboardStats, RiskTier, UseCase, CorrectionResult
 )
 from src.config import config
 
@@ -22,6 +22,7 @@ from src.verification_router.router import VerificationRouter
 from src.audit.trace import AuditLogger
 from src.correction.cove_revise import CoVeReviser
 from src.correction.bias_resample import BiasResampler
+from src.correction.redact import apply_redaction
 
 # Assuming detectors are available
 from src.detectors.factuality import FactualityDetector
@@ -161,8 +162,26 @@ async def evaluate(request: EvaluationRequest):
                 corrected_output = b_res.corrected_text
                 correction_result = b_res
                 
-        # If redacted, we might want to change decision to allow with redacted output, but following simple flow here
-        
+    # A REDACT decision has to actually mask something. The privacy detector already
+    # reports exact offsets, so the masked text is what the caller receives.
+    if decision == Decision.REDACT:
+        privacy_spans = [
+            span
+            for res in valid_results
+            if res.category.value == "privacy"
+            for span in res.flagged_spans
+        ]
+        if privacy_spans:
+            corrected_output = apply_redaction(corrected_output, privacy_spans)
+            correction_result = CorrectionResult(
+                attempted=True,
+                succeeded=True,
+                original_text=request.output_text,
+                corrected_text=corrected_output,
+                method="span_redaction",
+                details={"spans_masked": len(privacy_spans)},
+            )
+
     latency_ms = (time.time() - start_time) * 1000
     
     # 7. Log Decision Trace
