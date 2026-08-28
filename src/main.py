@@ -85,7 +85,12 @@ async def evaluate(request: EvaluationRequest):
         factuality_detector.detect(request.input_text, request.output_text, depth=depth),
         privacy_detector.detect(request.input_text, request.output_text),
         bias_detector.detect(request.input_text, request.output_text),
-        cost_detector.detect(request.input_text, request.output_text)
+        cost_detector.detect(
+            request.input_text,
+            request.output_text,
+            session_id=request.session_id,
+            model_name=request.model_name,
+        )
     ]
     detection_results = await asyncio.gather(*detectors_tasks, return_exceptions=True)
 

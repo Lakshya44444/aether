@@ -32,6 +32,7 @@ class SentinelConfig(BaseSettings):
     bias_threshold: float = 0.5
     cost_warn_usd: float = 0.50
     cost_block_usd: float = 2.00
+    cost_retry_escalate_count: int = 3
 
     # ── Session Tracking ─────────────────────────────────────────
     max_session_exposure: float = 1.0
