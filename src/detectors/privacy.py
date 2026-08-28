@@ -5,6 +5,7 @@ from typing import Any
 
 from src.models.schemas import DetectionResult, FlaggedSpan, RiskCategory
 from src.detectors.base import BaseDetector
+from src.config import config
 
 # Severity per PII type. A leaked national identifier is not the same event as a leaked
 # office phone number, so the score is driven by what was found rather than how many
@@ -119,7 +120,7 @@ class PrivacyDetector(BaseDetector):
         return DetectionResult(
             category=RiskCategory.PRIVACY,
             score=score,
-            flagged=score > 0,
+            flagged=score >= config.privacy_threshold,
             flagged_spans=flagged_spans,
             details={"found_types": sorted(found_types), "count": len(flagged_spans)},
             latency_ms=latency_ms

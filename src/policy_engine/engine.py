@@ -3,6 +3,7 @@ import json
 from typing import Dict, Any, Tuple
 from src.models.schemas import RiskAssessment, Decision, ActionType, RiskTier
 from src.risk_fabric.action_impact import get_impact_class
+from src.config import config
 
 _SEVERITY_ORDER = {
     Decision.ALLOW: 0,
@@ -18,7 +19,6 @@ _DEFAULT_POLICY = {
     "policy_id": "default",
     "fail_mode": "fail_closed",
     "mandatory_human_review_actions": [],
-    "max_session_exposure": 1.0,
     "thresholds": {},
 }
 
@@ -120,7 +120,7 @@ class PolicyEngine:
 
             # Accumulated session exposure tightens control independently of this turn's
             # score, which is the whole point of tracking it across a conversation.
-            max_exposure = policy.get("max_session_exposure", 1.0)
+            max_exposure = policy.get("max_session_exposure", config.max_session_exposure)
             if risk_assessment.session_exposure > max_exposure:
                 if _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.ESCALATE]:
                     worst_decision = Decision.ESCALATE

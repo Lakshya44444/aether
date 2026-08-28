@@ -4,6 +4,7 @@ from typing import Any
 
 from src.models.schemas import DetectionResult, FlaggedSpan, RiskCategory
 from src.detectors.base import BaseDetector
+from src.config import config
 
 # Matches a straight or curly apostrophe. Hardcoding U+2019 made the rule unmatchable
 # against ordinary typed input.
@@ -89,7 +90,7 @@ class BiasDetector(BaseDetector):
         return DetectionResult(
             category=RiskCategory.BIAS,
             score=max_score,
-            flagged=max_score > 0,
+            flagged=max_score >= config.bias_threshold,
             details={"matches": len(flagged_spans)},
             flagged_spans=flagged_spans,
             latency_ms=latency_ms

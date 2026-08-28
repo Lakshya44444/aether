@@ -32,8 +32,8 @@ class SentinelConfig(BaseSettings):
     # ── Detection Thresholds (defaults, overridable per policy) ──
     factuality_threshold: float = 0.35
     evidence_overlap_threshold: float = 0.45
-    privacy_threshold: float = 0.3
-    bias_threshold: float = 0.5
+    privacy_threshold: float = 0.25
+    bias_threshold: float = 0.4
     cost_warn_usd: float = 0.50
     cost_block_usd: float = 2.00
     cost_retry_escalate_count: int = 3

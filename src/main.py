@@ -10,7 +10,7 @@ from src.models.schemas import (
     InputGuardrailRequest, InputGuardrailResponse,
     HumanReviewRequest, HumanReviewResponse,
     DecisionTrace, RiskAssessment, Decision,
-    DashboardStats, RiskTier, UseCase, CorrectionResult
+    DashboardStats, RiskTier, UseCase, CorrectionResult, VerificationDepth
 )
 from src.config import config
 
@@ -35,7 +35,7 @@ app = FastAPI(title="Sentinel AI Runtime Control Plane")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in config.cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -95,7 +95,12 @@ async def evaluate(request: EvaluationRequest):
     # The policy's latency budget is enforced, not merely documented. A detector that
     # overruns is treated exactly like one that raised: it produced no signal, so the
     # declared fail mode decides what happens rather than the absence of a flag.
-    budget_s = policy_config.get("latency_budget_ms", config.deep_latency_budget_ms) / 1000
+    default_budget_ms = {
+        VerificationDepth.SHALLOW: config.shallow_latency_budget_ms,
+        VerificationDepth.MEDIUM: config.medium_latency_budget_ms,
+        VerificationDepth.DEEP: config.deep_latency_budget_ms,
+    }[depth]
+    budget_s = policy_config.get("latency_budget_ms", default_budget_ms) / 1000
     detection_results = await asyncio.gather(
         *[asyncio.wait_for(task, timeout=budget_s) for task in detectors_tasks],
         return_exceptions=True,
@@ -307,3 +312,9 @@ async def get_session(session_id: str):
 # Mount dashboard if exists
 if os.path.exists("dashboard"):
     app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host=config.host, port=config.port)
