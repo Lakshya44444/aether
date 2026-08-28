@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINEL | AI Runtime Control Plane</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="top-nav glass-panel">
+            <div class="brand">
+                <div class="logo-glow"></div>
+                <h1>SENTINEL</h1>
+                <span class="tagline">AI Runtime Control Plane</span>
+            </div>
+            <div class="status-indicator">
+                <div class="pulse-dot active" id="connection-dot"></div>
+                <span id="connection-text">Connected</span>
+            </div>
+        </header>
+
+        <main class="dashboard-grid">
+            <!-- Stats Cards Row -->
+            <section class="stats-row">
+                <div class="stat-card glass-panel gradient-border">
+                    <h3>Total Evaluations</h3>
+                    <div class="stat-value" id="stat-evals" data-value="0">0</div>
+                    <div class="stat-trend positive">↑ 12% live</div>
+                </div>
+                <div class="stat-card glass-panel gradient-border">
+                    <h3>Avg Latency</h3>
+                    <div class="stat-value"><span id="stat-latency" data-value="0">0</span> <span class="unit">ms</span></div>
+                    <div class="stat-trend target">Target: < 200ms</div>
+                </div>
+                <div class="stat-card glass-panel gradient-border">
+                    <h3>False Positive Rate</h3>
+                    <div class="stat-value"><span id="stat-fpr" data-value="0">0</span><span class="unit">%</span></div>
+                    <div class="stat-trend negative">↓ 0.4%</div>
+                </div>
+                <div class="stat-card glass-panel gradient-border">
+                    <h3>Alert/Incident Rate</h3>
+                    <div class="stat-value"><span id="stat-air" data-value="0">0</span><span class="unit">%</span></div>
+                    <div class="stat-trend neutral">Stable</div>
+                </div>
+            </section>
+
+            <!-- Main Charts -->
+            <section class="charts-row">
+                <div class="chart-container glass-panel">
+                    <h2>Decision Distribution</h2>
+                    <div class="chart-wrapper">
+                        <canvas id="decisionChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-container glass-panel">
+                    <h2>Risk Distribution</h2>
+                    <div class="chart-wrapper">
+                        <canvas id="riskChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Live Feed and Review Queue -->
+            <section class="feed-review-row">
+                <div class="live-feed glass-panel">
+                    <div class="panel-header">
+                        <h2>Live Decision Feed</h2>
+                        <div class="live-indicator">Polling...</div>
+                    </div>
+                    <div class="table-container">
+                        <table id="feed-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Use Case</th>
+                                    <th>Action</th>
+                                    <th>Decision</th>
+                                    <th>Risk Score</th>
+                                    <th>Latency</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="feed-body">
+                                <!-- Feed rows populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="review-queue glass-panel">
+                    <h2>Human Review Queue</h2>
+                    <div class="queue-container" id="review-queue-container">
+                        <!-- Queue items populated by JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Bottom Row: Test Panel & Session Monitor -->
+            <section class="bottom-row">
+                <div class="test-panel glass-panel">
+                    <h2>Interactive Test Panel</h2>
+                    <form id="test-form">
+                        <div class="form-group">
+                            <label>Use Case</label>
+                            <select id="test-use-case">
+                                <option value="customer_support">Customer Support</option>
+                                <option value="internal_copilot">Internal Copilot</option>
+                                <option value="finance_agent">Finance Agent</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Action</label>
+                            <select id="test-action">
+                                <option value="generate_text">Generate Text</option>
+                                <option value="draft_email">Draft Email</option>
+                                <option value="send_email">Send Email</option>
+                                <option value="update_crm">Update CRM</option>
+                                <option value="delete_record">Delete Record</option>
+                                <option value="execute_payment">Execute Payment</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Input Text</label>
+                            <textarea id="test-input" rows="2" placeholder="User prompt..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Output Text (Model Response)</label>
+                            <textarea id="test-output" rows="3" placeholder="Model output to evaluate..."></textarea>
+                        </div>
+                        <button type="submit" class="btn-primary">Evaluate</button>
+                    </form>
+                    <div id="test-result" class="test-result hidden">
+                        <!-- Result populated by JS -->
+                    </div>
+                </div>
+
+                <div class="session-monitor glass-panel">
+                    <h2>Active Session Monitor</h2>
+                    <div class="session-list" id="session-list">
+                        <!-- Sessions populated by JS -->
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Trace Detail Modal -->
+    <div id="trace-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Trace Details <span id="modal-trace-id" class="mono-text"></span></h2>
+                <button class="close-btn" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Trace details populated by JS -->
+            </div>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
