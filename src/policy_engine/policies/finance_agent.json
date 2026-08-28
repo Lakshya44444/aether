@@ -4,12 +4,69 @@
   "risk_tier": "unacceptable",
   "fail_mode": "fail_closed",
   "thresholds": {
-    "factuality": {"warn": 0.1, "block": 0.7},
-    "privacy": {"warn": 0.1, "block": 0.3},
-    "bias": {"warn": 0.2, "block": 0.5},
-    "cost": {"warn": 0.3, "block": 0.7}
+    "factuality": {
+      "routine": {
+        "warn": 0.4,
+        "block": 0.75
+      },
+      "elevated": {
+        "warn": 0.3,
+        "block": 0.6
+      },
+      "severe": {
+        "warn": 0.2,
+        "block": 0.45
+      }
+    },
+    "privacy": {
+      "routine": {
+        "warn": 0.1,
+        "block": 0.3
+      },
+      "elevated": {
+        "warn": 0.1,
+        "block": 0.25
+      },
+      "severe": {
+        "warn": 0.05,
+        "block": 0.15
+      }
+    },
+    "bias": {
+      "routine": {
+        "warn": 0.3,
+        "block": 0.6
+      },
+      "elevated": {
+        "warn": 0.25,
+        "block": 0.5
+      },
+      "severe": {
+        "warn": 0.2,
+        "block": 0.4
+      }
+    },
+    "cost": {
+      "routine": {
+        "warn": 0.4,
+        "block": 0.8
+      },
+      "elevated": {
+        "warn": 0.35,
+        "block": 0.7
+      },
+      "severe": {
+        "warn": 0.3,
+        "block": 0.6
+      }
+    }
   },
-  "mandatory_human_review_actions": ["send_email", "update_crm", "delete_record", "execute_payment"],
+  "mandatory_human_review_actions": [
+    "send_email",
+    "update_crm",
+    "delete_record",
+    "execute_payment"
+  ],
   "max_session_exposure": 0.5,
   "pii_handling": "block",
   "latency_budget_ms": 1000

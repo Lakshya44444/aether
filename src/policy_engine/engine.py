@@ -2,7 +2,26 @@ import os
 import json
 from typing import Dict, Any, Tuple
 from src.models.schemas import RiskAssessment, Decision, ActionType, RiskTier
-from src.risk_fabric.action_impact import compute_action_risk_multiplier
+from src.risk_fabric.action_impact import get_impact_class
+
+_SEVERITY_ORDER = {
+    Decision.ALLOW: 0,
+    Decision.WARN: 1,
+    Decision.REDACT: 2,
+    Decision.ESCALATE: 3,
+    Decision.BLOCK: 4,
+}
+
+_DEFAULT_THRESHOLDS = {"warn": 0.5, "block": 0.8}
+
+_DEFAULT_POLICY = {
+    "policy_id": "default",
+    "fail_mode": "fail_closed",
+    "mandatory_human_review_actions": [],
+    "max_session_exposure": 1.0,
+    "thresholds": {},
+}
+
 
 class PolicyEngine:
     def __init__(self, policies_dir: str):
@@ -23,87 +42,105 @@ class PolicyEngine:
                     policy = json.load(f)
                     self.policies[policy.get("use_case")] = policy
 
+    def _thresholds_for(self, policy: Dict[str, Any], category: str, impact_class: str) -> Dict[str, float]:
+        """Resolves the threshold pair for a category at a given impact class.
+
+        Thresholds are indexed by impact class rather than scaled by a multiplier, so
+        every configured number stays on the detector's own [0, 1] scale and a policy
+        file can be read without mentally recomputing anything.
+        """
+        by_category = policy.get("thresholds", {}).get(category)
+        if not by_category:
+            return dict(_DEFAULT_THRESHOLDS)
+        if impact_class in by_category:
+            return by_category[impact_class]
+        # A flat {"warn": x, "block": y} block still works, applied to every action.
+        if "warn" in by_category or "block" in by_category:
+            return {**_DEFAULT_THRESHOLDS, **by_category}
+        return dict(_DEFAULT_THRESHOLDS)
+
     def evaluate(self, risk_assessment: RiskAssessment) -> Tuple[Decision, str, str]:
         """Evaluates the risk assessment against the policy.
+
         Returns: (decision, reason, policy_id)
         """
         use_case_str = risk_assessment.use_case.value
-        policy = self.policies.get(use_case_str)
-
-        # Default policy if none matched
-        if not policy:
-            policy = {
-                "policy_id": "default",
-                "fail_mode": "fail_closed",
-                "mandatory_human_review_actions": [],
-                "max_session_exposure": 1.0,
-                "thresholds": {}
-            }
+        policy = self.policies.get(use_case_str, _DEFAULT_POLICY)
 
         policy_id = policy.get("policy_id", "default")
         fail_mode = policy.get("fail_mode", "fail_closed")
 
         try:
-            # Decision logic
-            multiplier = compute_action_risk_multiplier(risk_assessment.action_impact, risk_assessment.action_reversibility)
+            impact_class = get_impact_class(
+                risk_assessment.action_impact, risk_assessment.action_reversibility
+            )
 
-            # First, evaluate the actual risk signal and action impact. This keeps the decision aligned with the
-            # report's central claim: what the AI is about to do matters as much as what it said.
-            max_exposure = policy.get("max_session_exposure", 1.0)
-            exposure_trigger = risk_assessment.session_exposure > max_exposure and risk_assessment.current_turn_risk >= 0.7
-
-            # 3. Check detection results
             worst_decision = Decision.ALLOW
             reasons = []
-            severity_order = {
-                Decision.ALLOW: 0,
-                Decision.WARN: 1,
-                Decision.REDACT: 2,
-                Decision.ESCALATE: 3,
-                Decision.BLOCK: 4
-            }
 
+            # Every result is scored against policy, not just the ones a detector chose to
+            # flag. `flagged` is a detector-local opinion; whether a score matters is the
+            # policy's call, which is what keeps interpretation and decision separate.
             for result in risk_assessment.detection_results:
-                if result.flagged:
-                    cat_str = result.category.value
-                    thresholds = policy.get("thresholds", {}).get(cat_str, {"warn": 0.5, "block": 0.8})
+                cat_str = result.category.value
+                thresholds = self._thresholds_for(policy, cat_str, impact_class)
+                warn_thresh = thresholds.get("warn", 0.5)
+                block_thresh = thresholds.get("block", 0.8)
 
-                    adjusted_score = result.score * multiplier
-                    warn_thresh = thresholds.get("warn", 0.5)
-                    block_thresh = thresholds.get("block", 0.8)
+                current_decision = Decision.ALLOW
+                if result.score >= block_thresh:
+                    current_decision = Decision.BLOCK
+                elif result.score >= warn_thresh:
+                    if cat_str == "privacy" and policy.get("pii_handling") == "redact":
+                        current_decision = Decision.REDACT
+                    else:
+                        current_decision = Decision.WARN
 
-                    current_decision = Decision.ALLOW
-                    if adjusted_score >= block_thresh:
-                        current_decision = Decision.BLOCK
-                    elif adjusted_score >= warn_thresh:
-                        if cat_str == "privacy" and policy.get("pii_handling") == "redact":
-                            current_decision = Decision.REDACT
-                        else:
-                            current_decision = Decision.WARN
+                if _SEVERITY_ORDER[current_decision] > _SEVERITY_ORDER[worst_decision]:
+                    worst_decision = current_decision
 
-                    if severity_order[current_decision] > severity_order[worst_decision]:
-                        worst_decision = current_decision
+                if current_decision != Decision.ALLOW:
+                    reasons.append(
+                        f"{cat_str.capitalize()} score {result.score:.2f} at {impact_class} "
+                        f"impact (warn {warn_thresh}, block {block_thresh}) triggered "
+                        f"{current_decision.value}"
+                    )
 
-                    if current_decision != Decision.ALLOW:
-                        reasons.append(f"{cat_str.capitalize()} score {adjusted_score:.2f} (adj) triggered {current_decision.value}")
-
-            # Escalation is a policy-driven requirement for certain actions, but it should not override a more severe
-            # action-impact-driven BLOCK when the underlying risk is already high.
+            # Actions the policy always routes past a human. REDACT is included in the
+            # upgradeable set: masking a value does not make an irreversible action safe.
             mandatory_actions = policy.get("mandatory_human_review_actions", [])
-            if risk_assessment.action.value in mandatory_actions and worst_decision in (Decision.ALLOW, Decision.WARN):
+            if (
+                risk_assessment.action.value in mandatory_actions
+                and _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.ESCALATE]
+            ):
                 worst_decision = Decision.ESCALATE
-                reasons.append(f"Action {risk_assessment.action.value} requires mandatory human review")
+                reasons.append(
+                    f"Action {risk_assessment.action.value} requires mandatory human review"
+                )
 
-            if exposure_trigger:
-                if severity_order[Decision.BLOCK] >= severity_order[worst_decision]:
-                    worst_decision = Decision.BLOCK
-                    reasons.append(f"Session exposure {risk_assessment.session_exposure:.2f} exceeds maximum allowed ({max_exposure})")
+            # Accumulated session exposure tightens control independently of this turn's
+            # score, which is the whole point of tracking it across a conversation.
+            max_exposure = policy.get("max_session_exposure", 1.0)
+            if risk_assessment.session_exposure > max_exposure:
+                if _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.ESCALATE]:
+                    worst_decision = Decision.ESCALATE
+                    reasons.append(
+                        f"Session exposure {risk_assessment.session_exposure:.2f} exceeds "
+                        f"maximum allowed ({max_exposure})"
+                    )
 
-            # If the action is irreversible and critical, a high-risk decision should be BLOCK even when a policy may
-            # only propose escalation for the action itself.
-            if risk_assessment.action_impact.value in {"critical", "high"} and risk_assessment.action_reversibility.value in {"low", "very_low"} and worst_decision in {Decision.ESCALATE, Decision.WARN}:
+            # An irreversible, high-impact action carrying any live flag is never released
+            # on a decision weaker than BLOCK.
+            if (
+                impact_class == "severe"
+                and worst_decision != Decision.ALLOW
+                and _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.BLOCK]
+            ):
                 worst_decision = Decision.BLOCK
-                reasons.append(f"Irreversible {risk_assessment.action.value} action with high impact exceeds fail-safe threshold")
+                reasons.append(
+                    f"Irreversible {risk_assessment.action.value} action with an active "
+                    f"risk signal exceeds fail-safe threshold"
+                )
 
             if worst_decision == Decision.ALLOW:
                 return Decision.ALLOW, "All checks passed", policy_id
@@ -113,5 +150,4 @@ class PolicyEngine:
         except Exception as e:
             if fail_mode == "fail_open":
                 return Decision.ALLOW, f"Error during evaluation ({str(e)}), fail_mode is fail_open", policy_id
-            else:
-                return Decision.BLOCK, f"Error during evaluation ({str(e)}), fail_mode is fail_closed", policy_id
+            return Decision.BLOCK, f"Error during evaluation ({str(e)}), fail_mode is fail_closed", policy_id
