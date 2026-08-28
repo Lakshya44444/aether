@@ -1,9 +1,13 @@
 from typing import Dict, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 
 from src.models.schemas import UseCase, DetectionResult, Trajectory, SessionInfo
 from src.config import config
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 class SessionState(BaseModel):
     session_id: str
@@ -12,8 +16,8 @@ class SessionState(BaseModel):
     current_exposure: float = 0.0
     trajectory: Trajectory = Trajectory.STABLE
     risk_history: List[float] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_seen: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_seen: datetime = Field(default_factory=_utcnow)
 
 class SessionTracker:
     def __init__(self):
@@ -26,7 +30,7 @@ class SessionTracker:
         Both this map and the cost detector's were unbounded process-local dicts, so a
         long-running gateway retained every session it had ever seen.
         """
-        cutoff = datetime.utcnow() - timedelta(minutes=config.session_timeout_minutes)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=config.session_timeout_minutes)
         for sid in [s for s, st in self.sessions.items() if st.last_seen < cutoff]:
             del self.sessions[sid]
 
@@ -43,7 +47,7 @@ class SessionTracker:
             self.sessions[session_id] = SessionState(session_id=session_id, use_case=use_case)
 
         session = self.sessions[session_id]
-        session.last_seen = datetime.utcnow()
+        session.last_seen = datetime.now(timezone.utc)
 
         # current_turn_risk: max of all detection scores for this turn
         current_turn_risk = 0.0

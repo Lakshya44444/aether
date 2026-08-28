@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +32,12 @@ from src.detectors.bias import BiasDetector
 from src.detectors.cost import CostDetector
 from src.input_guardrail.guardrail import InputGuardrail
 
-app = FastAPI(title="Sentinel AI Runtime Control Plane")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await audit_logger.init_db()
+    yield
+
+app = FastAPI(title="Sentinel AI Runtime Control Plane", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,10 +67,6 @@ privacy_detector = PrivacyDetector()
 bias_detector = BiasDetector()
 cost_detector = CostDetector()
 input_guardrail = InputGuardrail()
-
-@app.on_event("startup")
-async def startup_event():
-    await audit_logger.init_db()
 
 @app.post("/api/evaluate", response_model=EvaluationResponse)
 async def evaluate(request: EvaluationRequest):

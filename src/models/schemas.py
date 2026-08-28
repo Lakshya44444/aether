@@ -9,11 +9,15 @@ correction layer, audit log, and the API surface.
 from __future__ import annotations
 
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import uuid
 
 from pydantic import BaseModel, Field
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ╔══════════════════════════════════════════════════════════════════╗
@@ -186,7 +190,7 @@ class DecisionTrace(BaseModel):
     session state, matched policy, final decision, and plain-English reason.
     """
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
     request_id: str
     session_id: str
     use_case: UseCase
@@ -290,4 +294,4 @@ class SessionInfo(BaseModel):
     current_exposure: float = 0.0
     trajectory: Trajectory = Trajectory.STABLE
     last_decision: Optional[Decision] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
