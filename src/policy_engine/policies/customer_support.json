@@ -59,6 +59,20 @@
         "warn": 0.4,
         "block": 0.7
       }
+    },
+    "injection": {
+      "routine": {
+        "warn": 0.5,
+        "block": 0.9
+      },
+      "elevated": {
+        "warn": 0.5,
+        "block": 0.8
+      },
+      "severe": {
+        "warn": 0.4,
+        "block": 0.65
+      }
     }
   },
   "mandatory_human_review_actions": [
