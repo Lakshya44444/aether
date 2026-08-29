@@ -24,7 +24,7 @@ class SentinelConfig(BaseSettings):
     judge_samples: int = 3
     judge_timeout_s: float = 5.0
 
-    # ── Latency Budgets (ms) — Section 5.3, Table ────────────────
+    # ── Latency Budgets (ms) ──────────────────────────────
     shallow_latency_budget_ms: int = 200   # Galileo Luna-2 class
     medium_latency_budget_ms: int = 700    # Multi-sample consistency
     deep_latency_budget_ms: int = 1000     # Patronus Glider class

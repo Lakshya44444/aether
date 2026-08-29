@@ -1,7 +1,7 @@
 from typing import Tuple
 from src.models.schemas import ActionType, ActionImpact, ActionReversibility
 
-# Action Impact × Reversibility lookup table from Section 5.4.2
+# Action Impact × Reversibility lookup table
 _ACTION_PROFILE_MAP = {
     ActionType.GENERATE_TEXT: (ActionImpact.LOW, ActionReversibility.HIGH),
     ActionType.DRAFT_EMAIL: (ActionImpact.LOW, ActionReversibility.HIGH),

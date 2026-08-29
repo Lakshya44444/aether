@@ -10,7 +10,7 @@ _GENESIS = "0" * 64
 
 
 class AuditLogger:
-    """Decision Trace + SQLite audit log (Section 5.8).
+    """Decision Trace + SQLite audit log.
 
     Rows are hash-chained: each row stores the hash of the previous row together with
     its own content. SQLite cannot prevent an UPDATE or DELETE, so tamper-evidence is

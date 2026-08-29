@@ -25,7 +25,7 @@ def _utcnow() -> datetime:
 # ╚══════════════════════════════════════════════════════════════════╝
 
 class Decision(str, Enum):
-    """Five-state policy decision output (Section 5.5.1)."""
+    """Five-state policy decision output."""
     ALLOW = "ALLOW"
     WARN = "WARN"
     REDACT = "REDACT"
@@ -67,7 +67,7 @@ class ActionType(str, Enum):
 
 
 class ActionImpact(str, Enum):
-    """Impact level of an action (Section 5.4.2)."""
+    """Impact level of an action."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -75,7 +75,7 @@ class ActionImpact(str, Enum):
 
 
 class ActionReversibility(str, Enum):
-    """How reversible an action is once taken (Section 5.4.2)."""
+    """How reversible an action is once taken."""
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
@@ -83,7 +83,7 @@ class ActionReversibility(str, Enum):
 
 
 class Trajectory(str, Enum):
-    """Risk trajectory direction across session turns (Section 5.4.3)."""
+    """Risk trajectory direction across session turns."""
     RISING = "rising"
     FALLING = "falling"
     STABLE = "stable"
@@ -103,7 +103,7 @@ class VerificationDepth(str, Enum):
 class FlaggedSpan(BaseModel):
     """A span of text flagged by one or more detectors.
 
-    Multi-label by design (Section 5.2.4): a single span can carry
+    Multi-label by design: a single span can carry
     multiple risk categories simultaneously.
     """
     start: int
@@ -140,7 +140,7 @@ class DetectionResult(BaseModel):
 # ╚══════════════════════════════════════════════════════════════════╝
 
 class RiskAssessment(BaseModel):
-    """Full risk assessment — the Risk Fabric's output (Section 5.4).
+    """Full risk assessment — the Risk Fabric's output.
 
     Combines detection results with context (use case, action, session
     history) to produce a structured risk picture for the Policy Engine.
@@ -183,7 +183,7 @@ class CorrectionResult(BaseModel):
 # ╚══════════════════════════════════════════════════════════════════╝
 
 class DecisionTrace(BaseModel):
-    """Complete, immutable record of a single Sentinel decision (Section 5.8).
+    """Complete, immutable record of a single Sentinel decision.
 
     Logged for EVERY decision regardless of outcome. Contains:
     detection signals, context, action impact/reversibility,
@@ -235,7 +235,7 @@ class EvaluationResponse(BaseModel):
 
 
 class InputGuardrailRequest(BaseModel):
-    """Request to screen input BEFORE it reaches the AI model (Section 5.1)."""
+    """Request to screen input BEFORE it reaches the AI model."""
     input_text: str
     use_case: UseCase = UseCase.CUSTOMER_SUPPORT
     session_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -251,7 +251,7 @@ class InputGuardrailResponse(BaseModel):
 
 
 class HumanReviewRequest(BaseModel):
-    """Human reviewer's decision on an escalated case (Section 5.7)."""
+    """Human reviewer's decision on an escalated case."""
     trace_id: str
     approved: bool
     reviewer_id: str = "reviewer"

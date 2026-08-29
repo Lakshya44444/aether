@@ -3,7 +3,7 @@ from src.risk_fabric.action_impact import get_action_profile, get_impact_class
 
 
 class VerificationRouter:
-    """Adaptive Verification Depth Router (Section 5.3).
+    """Adaptive Verification Depth Router.
 
     Routes on request context alone — use case tier and intended action — both known
     before any detection runs, so the routing decision costs nothing.

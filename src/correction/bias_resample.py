@@ -3,7 +3,7 @@ from typing import List
 from src.models.schemas import CorrectionResult, FlaggedSpan
 
 class BiasResampler:
-    """BiasFilter approximation (Section 5.6)."""
+    """BiasFilter approximation."""
     
     async def resample(self, output_text: str, flagged_spans: List[FlaggedSpan]) -> CorrectionResult:
         """Attempts to neutralise biased spans."""

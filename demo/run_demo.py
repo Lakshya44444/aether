@@ -1,6 +1,6 @@
 """
 Sentinel — AI Runtime Control Plane
-Connected Demo Narrative (Section 9)
+Connected Demo Narrative
 
 Tells ONE connected story touching all three use cases and all five decision states.
 Run with: python -m demo.run_demo  (from e:\\sentinel)

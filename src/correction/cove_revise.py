@@ -3,7 +3,7 @@ from typing import List, Optional
 from src.models.schemas import CorrectionResult, FlaggedSpan
 
 class CoVeReviser:
-    """CoVe-style factuality correction (Section 5.6)."""
+    """CoVe-style factuality correction."""
     
     async def revise(self, output_text: str, flagged_spans: List[FlaggedSpan], context_documents: Optional[List[str]] = None) -> CorrectionResult:
         """Attempts to revise factually incorrect spans."""
