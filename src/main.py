@@ -15,7 +15,6 @@ from src.models.schemas import (
 )
 from src.config import config
 
-# Import modules (mock paths for detectors based on prompt description)
 from src.risk_fabric.session_tracker import SessionTracker
 from src.risk_fabric.action_impact import get_action_profile
 from src.policy_engine.engine import PolicyEngine
@@ -25,7 +24,6 @@ from src.correction.cove_revise import CoVeReviser
 from src.correction.bias_resample import BiasResampler
 from src.correction.redact import apply_redaction
 
-# Assuming detectors are available
 from src.detectors.factuality import FactualityDetector
 from src.detectors.privacy import PrivacyDetector
 from src.detectors.bias import BiasDetector
@@ -54,7 +52,6 @@ _SEVERITY = {
     Decision.BLOCK: 4,
 }
 
-# Initialize components
 session_tracker = SessionTracker()
 policy_engine = PolicyEngine(config.policies_dir)
 verification_router = VerificationRouter()
@@ -72,16 +69,12 @@ input_guardrail = InputGuardrail()
 async def evaluate(request: EvaluationRequest):
     start_time = time.time()
     
-    # 1. Extract Request Context
-    # Fallback risk tier based on use case policy (if not specified, assuming high for safety)
     policy_config = policy_engine.policies.get(request.use_case.value, {})
     risk_tier_str = policy_config.get("risk_tier", RiskTier.HIGH.value)
     risk_tier = RiskTier(risk_tier_str)
     
-    # 2. Route Verification Depth
     depth = verification_router.route(request.use_case, request.action, risk_tier)
     
-    # 3. Run Detectors in Parallel
     detector_names = ["factuality", "privacy", "bias", "cost"]
     detectors_tasks = [
         factuality_detector.detect(request.input_text, request.output_text, depth=depth),
@@ -115,7 +108,6 @@ async def evaluate(request: EvaluationRequest):
         if isinstance(res, Exception)
     ]
 
-    # 4. Build Risk Assessment
     impact, reversibility = get_action_profile(request.action)
     turn_risk, session_exposure, trajectory = session_tracker.update(
         request.session_id, request.use_case, valid_results
@@ -134,7 +126,6 @@ async def evaluate(request: EvaluationRequest):
         verification_depth=depth
     )
     
-    # 5. Run Policy Engine
     decision, reason, policy_id = policy_engine.evaluate(risk_assessment)
     fail_mode = policy_config.get("fail_mode", "fail_closed")
 
@@ -154,7 +145,6 @@ async def evaluate(request: EvaluationRequest):
                 decision = Decision.BLOCK
             reason = f"{failure_note}; fail_closed -> BLOCK"
 
-    # 6. Attempt Correction if BLOCK or ESCALATE
     correction_result = None
     corrected_output = request.output_text
 
@@ -238,7 +228,6 @@ async def evaluate(request: EvaluationRequest):
 
     latency_ms = (time.time() - start_time) * 1000
     
-    # 7. Log Decision Trace
     trace = DecisionTrace(
         request_id="req-" + str(time.time()),
         session_id=request.session_id,
@@ -259,7 +248,6 @@ async def evaluate(request: EvaluationRequest):
     )
     await audit_logger.log_trace(trace)
     
-    # 8. Return Response
     return EvaluationResponse(
         decision=decision,
         reason=reason,
@@ -311,7 +299,6 @@ async def get_stats():
 async def get_session(session_id: str):
     return session_tracker.get_session_info(session_id)
 
-# Mount dashboard if exists
 if os.path.exists("dashboard"):
     app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
 
