@@ -28,6 +28,7 @@ from src.detectors.factuality import FactualityDetector
 from src.detectors.privacy import PrivacyDetector
 from src.detectors.bias import BiasDetector
 from src.detectors.cost import CostDetector
+from src.detectors.injection import InjectionDetector
 from src.input_guardrail.guardrail import InputGuardrail
 
 @asynccontextmanager
@@ -63,6 +64,7 @@ factuality_detector = FactualityDetector()
 privacy_detector = PrivacyDetector()
 bias_detector = BiasDetector()
 cost_detector = CostDetector()
+injection_detector = InjectionDetector()
 input_guardrail = InputGuardrail()
 
 @app.post("/api/evaluate", response_model=EvaluationResponse)
@@ -75,9 +77,16 @@ async def evaluate(request: EvaluationRequest):
     
     depth = verification_router.route(request.use_case, request.action, risk_tier)
     
-    detector_names = ["factuality", "privacy", "bias", "cost"]
+    # The last two screen the prompt rather than the completion. Without them
+    # /api/evaluate looked only at what the model said, so a prompt carrying PII and
+    # "ignore all prior instructions" returned ALLOW / "All checks passed" -- the input
+    # guardrail existed only as a separate endpoint an integrator had no reason to call.
+    detector_names = ["factuality", "privacy", "bias", "cost", "input_privacy", "injection"]
     detectors_tasks = [
-        factuality_detector.detect(request.input_text, request.output_text, depth=depth),
+        factuality_detector.detect(
+            request.input_text, request.output_text,
+            depth=depth, context_documents=request.context_documents,
+        ),
         privacy_detector.detect(request.input_text, request.output_text),
         bias_detector.detect(request.input_text, request.output_text),
         cost_detector.detect(
@@ -85,7 +94,9 @@ async def evaluate(request: EvaluationRequest):
             request.output_text,
             session_id=request.session_id,
             model_name=request.model_name,
-        )
+        ),
+        privacy_detector.detect("", request.input_text),
+        injection_detector.detect(request.input_text, ""),
     ]
     # A detector that overruns its budget is treated exactly like one that raised: it
     # produced no signal, so the declared fail mode decides rather than the absence of
@@ -102,7 +113,17 @@ async def evaluate(request: EvaluationRequest):
         return_exceptions=True,
     )
 
+    by_name = dict(zip(detector_names, detection_results))
     valid_results = [res for res in detection_results if not isinstance(res, Exception)]
+
+    # Input-side spans carry offsets into the prompt, not the completion. Tagging them
+    # keeps them out of the output redaction path, where they would mask the wrong
+    # characters, while still letting the policy engine score them.
+    for name in ("input_privacy", "injection"):
+        result = by_name[name]
+        if not isinstance(result, Exception):
+            result.details = {**result.details, "side": "input"}
+
     failed_detectors = [
         f"{name} (timeout)" if isinstance(res, asyncio.TimeoutError) else name
         for name, res in zip(detector_names, detection_results)
@@ -153,7 +174,7 @@ async def evaluate(request: EvaluationRequest):
         fact_spans = []
         bias_spans = []
         for res in valid_results:
-            if res.flagged:
+            if res.flagged and res.details.get("side") != "input":
                 if res.category.value == "factuality":
                     fact_spans.extend(res.flagged_spans)
                 elif res.category.value == "bias":
@@ -188,6 +209,11 @@ async def evaluate(request: EvaluationRequest):
                 )
                 new_decision, new_reason, _ = policy_engine.evaluate(recheck_assessment)
                 if _SEVERITY[new_decision] < _SEVERITY[decision]:
+                    # A corrected response is not a clean response. Returning ALLOW here
+                    # told the caller nothing happened, while the text they were handed
+                    # had been rewritten -- and a caller that keeps its own copy of the
+                    # original would then ship the uncorrected version.
+                    new_decision = max(new_decision, Decision.WARN, key=lambda d: _SEVERITY[d])
                     corrected_output = attempted.corrected_text
                     attempted.details = {
                         **attempted.details,
@@ -210,12 +236,10 @@ async def evaluate(request: EvaluationRequest):
     # A REDACT decision has to actually mask something. The privacy detector already
     # reports exact offsets, so the masked text is what the caller receives.
     if decision == Decision.REDACT:
-        privacy_spans = [
-            span
-            for res in valid_results
-            if res.category.value == "privacy"
-            for span in res.flagged_spans
-        ]
+        output_privacy = by_name["privacy"]
+        privacy_spans = (
+            [] if isinstance(output_privacy, Exception) else list(output_privacy.flagged_spans)
+        )
         if privacy_spans:
             corrected_output = apply_redaction(corrected_output, privacy_spans)
             correction_result = CorrectionResult(
@@ -227,8 +251,10 @@ async def evaluate(request: EvaluationRequest):
                 details={"spans_masked": len(privacy_spans)},
             )
 
+    session_tracker.record_decision(request.session_id, decision)
+
     latency_ms = (time.time() - start_time) * 1000
-    
+
     trace = DecisionTrace(
         request_id="req-" + str(time.time()),
         session_id=request.session_id,
@@ -300,8 +326,11 @@ async def get_stats():
 async def get_session(session_id: str):
     return session_tracker.get_session_info(session_id)
 
-if os.path.exists("dashboard"):
-    app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
+# Serve the built Next.js frontend when it exists, falling back to the legacy
+# static dashboard so the gateway still has a UI before the frontend is built.
+_FRONTEND = "frontend/out" if os.path.exists("frontend/out") else "dashboard"
+if os.path.exists(_FRONTEND):
+    app.mount("/", StaticFiles(directory=_FRONTEND, html=True), name="frontend")
 
 
 if __name__ == "__main__":
