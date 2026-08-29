@@ -87,9 +87,10 @@ async def evaluate(request: EvaluationRequest):
             model_name=request.model_name,
         )
     ]
-    # The policy's latency budget is enforced, not merely documented. A detector that
-    # overruns is treated exactly like one that raised: it produced no signal, so the
-    # declared fail mode decides what happens rather than the absence of a flag.
+    # A detector that overruns its budget is treated exactly like one that raised: it
+    # produced no signal, so the declared fail mode decides rather than the absence of
+    # a flag. Note this only bites at an await point -- the detectors are CPU-bound and
+    # currently never yield, so the timeout cannot actually interrupt them.
     default_budget_ms = {
         VerificationDepth.SHALLOW: config.shallow_latency_budget_ms,
         VerificationDepth.MEDIUM: config.medium_latency_budget_ms,
