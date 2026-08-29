@@ -2,10 +2,16 @@
 
 Runtime governance for AI systems that take actions.
 
-Aether sits between a model and whatever the model is about to do. It scores the
-output, weighs it against the action being requested and the session it belongs to,
-and returns one of five decisions — `ALLOW`, `WARN`, `REDACT`, `ESCALATE`, `BLOCK` —
-with a signed trace of how it got there.
+Aether is a working proof-of-concept AI runtime control plane: it sits between a
+model and whatever the model is about to do, scores the output, weighs it against
+its action and the session context, and returns one of five decisions — `ALLOW`,
+`WARN`, `REDACT`, `ESCALATE`, `BLOCK` — with a signed trace of how it got there.
+
+This repo implements the core control-plane pattern and decision logic in a way that
+is credible for a hackathon and a strong foundation for production work. It does not
+claim to fully solve every advanced research problem in the broader governance
+document: several design ideas are represented as realistic approximations or
+explicit future work rather than as production-complete systems.
 
 ```bash
 curl -s localhost:8000/api/evaluate -H 'content-type: application/json' -d '{
@@ -98,6 +104,37 @@ is recorded on the trace rather than being read as "nothing found".
 **The audit log is tamper-evident, not immutable.** Rows are hash-chained and the head
 is anchored, so mid-chain edits, tail truncation and forged review verdicts all break
 verification. SQLite cannot prevent an `UPDATE`; the log does not claim it can.
+
+---
+
+## Scope and honesty
+
+This project is intentionally scoped as a credible governance prototype rather than a
+full production deployment of every advanced guardrail research technique.
+
+The core concept is implemented and tested:
+
+- runtime interception between model output and action execution
+- use-case-aware policy decisions
+- action impact × reversibility logic
+- session exposure and trajectory tracking
+- input-side screening and output-side mitigation
+- decision trace and human-review workflow
+- evaluation harnesses and metric reporting
+
+The following are not claimed as fully solved production-grade components in this
+repo, even though they are relevant to the broader architecture and serve as clear
+future work:
+
+- full fairness / bias modeling at research-grade rigor
+- conformal prediction calibration with statistical guarantees
+- full multi-sample factuality verification at production latency budgets
+- advanced semantic caching, retrieval, and streaming verification
+- enterprise-scale deployment, adversarial robustness, and horizontal scaling
+
+In other words, Aether demonstrates the runtime governance idea and the decision layer
+that turns detection into action. The deeper research-grade capabilities are framed as
+next-step extensions, not as fully shipped production claims.
 
 ---
 
