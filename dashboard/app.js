@@ -9,16 +9,19 @@ const DECISIONS = {
     BLOCK: { label: 'BLOCK', class: 'dec-block' }
 };
 
+// The five decision colours, matching the policy states elsewhere in the product.
+// Canvas cannot read a CSS custom property, so these are the one place the palette
+// is repeated -- keep them in step with :root in styles.css.
 const CHART_COLORS = {
-    ALLOW: '#00e676',
-    WARN: '#ffab00',
-    REDACT: '#00b0ff',
-    ESCALATE: '#ff6d00',
-    BLOCK: '#ff1744',
-    FACTUALITY: '#7b61ff',
-    PRIVACY: '#00d4ff',
-    BIAS: '#ff3d71',
-    COST: '#aab'
+    ALLOW: '#0B7A52',
+    WARN: '#A8690C',
+    REDACT: '#1F5C8C',
+    ESCALATE: '#C2410C',
+    BLOCK: '#C8102E',
+    FACTUALITY: '#4A3F35',
+    PRIVACY: '#1F5C8C',
+    BIAS: '#C2410C',
+    COST: '#8A7D6D'
 };
 
 // Generate deterministic demo data for fallback
@@ -127,7 +130,7 @@ function updateStats(stats) {
         animateValue(evalsEl, parseInt(evalsEl.dataset.value) || 0, stats.total_evaluations, 1000);
     }
     
-    document.getElementById('stat-latency').textContent = stats.avg_latency_ms;
+    document.getElementById('stat-latency').textContent = Math.round(stats.avg_latency_ms);
     
     const fpr = ((stats.false_positive_count / stats.total_evaluations) * 100).toFixed(2);
     document.getElementById('stat-fpr').textContent = isNaN(fpr) ? 0 : fpr;
@@ -232,7 +235,7 @@ function updateFeed(traces) {
                     </div>
                 </div>
             </td>
-            <td class="mono-text">${trace.total_latency_ms}ms</td>
+            <td class="mono-text">${Math.round(trace.total_latency_ms)}ms</td>
             <td style="text-align:right;">›</td>
         `;
         
@@ -311,7 +314,7 @@ function openTraceModal(trace) {
         </div>
         
         <h3 style="margin-bottom:8px; color:var(--text-muted)">Risk Assessment</h3>
-        <pre style="background:rgba(0,0,0,0.3); padding:12px; border-radius:8px; font-family:var(--font-mono); font-size:0.8rem; overflow-x:auto;">
+        <pre style="background:var(--bg-base); border:1px solid var(--border-glass); padding:12px; font-family:var(--font-mono); font-size:0.8rem; overflow-x:auto;">
 ${JSON.stringify(trace.risk_assessment, null, 2)}
         </pre>
     `;

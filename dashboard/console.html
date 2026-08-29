@@ -6,7 +6,7 @@
     <title>SENTINEL | AI Runtime Control Plane</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Text&family=Syne:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -31,7 +31,7 @@
                 <div class="stat-card glass-panel gradient-border">
                     <h3>Total Evaluations</h3>
                     <div class="stat-value" id="stat-evals" data-value="0">0</div>
-                    <div class="stat-trend positive">↑ 12% live</div>
+                    <div class="stat-trend">since first trace</div>
                 </div>
                 <div class="stat-card glass-panel gradient-border">
                     <h3>Avg Latency</h3>
@@ -41,12 +41,12 @@
                 <div class="stat-card glass-panel gradient-border">
                     <h3>False Positive Rate</h3>
                     <div class="stat-value"><span id="stat-fpr" data-value="0">0</span><span class="unit">%</span></div>
-                    <div class="stat-trend negative">↓ 0.4%</div>
+                    <div class="stat-trend">approved after escalation</div>
                 </div>
                 <div class="stat-card glass-panel gradient-border">
                     <h3>Alert/Incident Rate</h3>
                     <div class="stat-value"><span id="stat-air" data-value="0">0</span><span class="unit">%</span></div>
-                    <div class="stat-trend neutral">Stable</div>
+                    <div class="stat-trend">alerts a human confirmed</div>
                 </div>
             </section>
 

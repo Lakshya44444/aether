@@ -1,26 +1,29 @@
 :root {
-    --bg-base: #0a0a0f;
-    --bg-panel: rgba(18, 18, 26, 0.7);
-    --bg-panel-solid: #12121a;
+    /* Same ink and stock as the landing page. The console used to be a dark neon
+       surface -- cyan, purple, glow shadows -- which is a different product. */
+    --bg-base: #FCF8F0;
+    --bg-panel: #F6F0E2;
+    --bg-panel-solid: #F6F0E2;
+
+    --text-main: #1A140F;
+    --text-muted: #8A7D6D;
     
-    --text-main: #f0f0f5;
-    --text-muted: #8a8a99;
-    
-    --accent-blue: #00d4ff;
-    --accent-purple: #7b61ff;
-    --accent-magenta: #ff3d71;
-    
-    --dec-allow: #00e676;
-    --dec-warn: #ffab00;
-    --dec-redact: #00b0ff;
-    --dec-escalate: #ff6d00;
-    --dec-block: #ff1744;
-    
-    --border-glass: rgba(255, 255, 255, 0.08);
-    --shadow-glow: 0 0 20px rgba(123, 97, 255, 0.15);
-    
-    --font-main: 'Inter', sans-serif;
-    --font-mono: 'Courier New', Courier, monospace;
+    --accent-blue: #1F5C8C;
+    --accent-purple: #C8102E;
+    --accent-magenta: #C8102E;
+
+    --dec-allow: #0B7A52;
+    --dec-warn: #A8690C;
+    --dec-redact: #1F5C8C;
+    --dec-escalate: #C2410C;
+    --dec-block: #C8102E;
+
+    --border-glass: #DDD3C0;
+    --shadow-glow: none;
+
+    --font-main: 'Syne', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    --font-display: 'DM Serif Text', Georgia, serif;
 }
 
 * {
@@ -35,9 +38,10 @@ body {
     font-family: var(--font-main);
     min-height: 100vh;
     overflow-x: hidden;
-    background-image: 
-        radial-gradient(circle at 15% 50%, rgba(123, 97, 255, 0.05) 0%, transparent 50%),
-        radial-gradient(circle at 85% 30%, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
+    background-image:
+        linear-gradient(#EAE2D2 1px, transparent 1px),
+        linear-gradient(90deg, #EAE2D2 1px, transparent 1px);
+    background-size: 40px 40px;
 }
 
 /* Scrollbar */
@@ -49,8 +53,8 @@ body {
     background: var(--bg-base);
 }
 ::-webkit-scrollbar-thumb {
-    background: #333344;
-    border-radius: 3px;
+    background: var(--border-glass);
+    border-radius: 0;
 }
 ::-webkit-scrollbar-thumb:hover {
     background: var(--accent-purple);
@@ -58,11 +62,12 @@ body {
 
 .glass-panel {
     background: var(--bg-panel);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background-image: none;
+    
+    -webkit-
     border: 1px solid var(--border-glass);
-    border-radius: 12px;
-    box-shadow: var(--shadow-glow);
+    border-radius: 0;
+    
 }
 
 .app-container {
@@ -88,27 +93,21 @@ body {
     gap: 16px;
 }
 
+/* Was a three-colour gradient square with a purple glow, pulsing on a three-second
+   loop. Now the same mark the landing page uses. */
 .logo-glow {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-magenta));
-    box-shadow: 0 0 15px var(--accent-purple);
-    animation: pulseGlow 3s infinite alternate;
-}
-
-@keyframes pulseGlow {
-    0% { box-shadow: 0 0 10px var(--accent-purple); }
-    100% { box-shadow: 0 0 25px var(--accent-blue); }
+    width: 22px;
+    height: 22px;
+    background: var(--text-main);
+    border-bottom: 3px solid var(--dec-block);
 }
 
 h1 {
     font-size: 1.5rem;
     font-weight: 700;
     letter-spacing: 2px;
-    background: linear-gradient(90deg, #fff, #b3b3cc);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    font-family: var(--font-display);
+    color: var(--text-main);
 }
 
 .tagline {
@@ -132,8 +131,8 @@ h1 {
 .pulse-dot {
     width: 8px;
     height: 8px;
-    border-radius: 50%;
-    background: #444;
+    border-radius: 0;
+    background: var(--border-glass);
 }
 .pulse-dot.active {
     background: var(--dec-allow);
@@ -154,10 +153,10 @@ h1 {
 }
 
 h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: 1.15rem;
     margin-bottom: 16px;
-    color: #fff;
+    color: var(--text-main);
 }
 
 h3 {
@@ -183,8 +182,7 @@ h3 {
 }
 
 .stat-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 25px rgba(123, 97, 255, 0.2);
+    border-color: var(--text-muted);
 }
 
 .gradient-border::before {
@@ -192,15 +190,14 @@ h3 {
     position: absolute;
     top: 0; left: 0; right: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple), var(--accent-magenta));
-    opacity: 0.7;
+    background: var(--dec-block);
 }
 
 .stat-value {
+    font-family: var(--font-display);
     font-size: 2.5rem;
-    font-weight: 700;
     margin-bottom: 8px;
-    color: #fff;
+    color: var(--text-main);
     display: flex;
     align-items: baseline;
     gap: 4px;
@@ -272,7 +269,7 @@ h3 {
     display: inline-block;
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: 0;
     background: var(--accent-blue);
     animation: pulseDot 2s infinite;
 }
@@ -303,7 +300,7 @@ th {
 
 td {
     padding: 12px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--bg-base);
     font-size: 0.9rem;
     vertical-align: middle;
 }
@@ -313,14 +310,14 @@ tbody tr {
     cursor: pointer;
 }
 tbody tr:hover {
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: var(--bg-base);
 }
 
 /* Badges */
 .badge {
     display: inline-block;
     padding: 4px 10px;
-    border-radius: 12px;
+    border-radius: 0;
     font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.5px;
@@ -329,32 +326,32 @@ tbody tr:hover {
 .badge-outline {
     border: 1px solid var(--border-glass);
     color: var(--text-muted);
-    background: rgba(255,255,255,0.02);
+    background: var(--bg-base);
 }
 
-.dec-allow { background: rgba(0, 230, 118, 0.15); color: var(--dec-allow); border: 1px solid rgba(0, 230, 118, 0.3); }
-.dec-warn { background: rgba(255, 171, 0, 0.15); color: var(--dec-warn); border: 1px solid rgba(255, 171, 0, 0.3); }
-.dec-redact { background: rgba(0, 176, 255, 0.15); color: var(--dec-redact); border: 1px solid rgba(0, 176, 255, 0.3); }
-.dec-escalate { background: rgba(255, 109, 0, 0.15); color: var(--dec-escalate); border: 1px solid rgba(255, 109, 0, 0.3); }
-.dec-block { background: rgba(255, 23, 68, 0.15); color: var(--dec-block); border: 1px solid rgba(255, 23, 68, 0.3); }
+.dec-allow { background: transparent; color: var(--dec-allow); border: 1px solid var(--dec-allow); }
+.dec-warn { background: transparent; color: var(--dec-warn); border: 1px solid var(--dec-warn); }
+.dec-redact { background: transparent; color: var(--dec-redact); border: 1px solid var(--dec-redact); }
+.dec-escalate { background: transparent; color: var(--dec-escalate); border: 1px solid var(--dec-escalate); }
+.dec-block { background: transparent; color: var(--dec-block); border: 1px solid var(--dec-block); }
 
 .mono-text {
     font-family: var(--font-mono);
     font-size: 0.85rem;
-    color: #aab;
+    color: var(--text-muted);
 }
 
 /* Risk Score Bar */
 .risk-bar-container {
     width: 100px;
     height: 6px;
-    background: rgba(255,255,255,0.1);
-    border-radius: 3px;
+    background: var(--border-glass);
+    border-radius: 0;
     overflow: hidden;
 }
 .risk-bar {
     height: 100%;
-    border-radius: 3px;
+    border-radius: 0;
 }
 
 /* Review Queue */
@@ -366,9 +363,9 @@ tbody tr:hover {
     gap: 12px;
 }
 .review-item {
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--bg-base);
     border: 1px solid var(--border-glass);
-    border-radius: 8px;
+    border-radius: 0;
     padding: 12px;
     display: flex;
     flex-direction: column;
@@ -381,7 +378,7 @@ tbody tr:hover {
 }
 .btn {
     padding: 6px 12px;
-    border-radius: 6px;
+    border-radius: 0;
     font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
@@ -394,10 +391,10 @@ tbody tr:hover {
 }
 .btn-approve:hover { background: rgba(0, 230, 118, 0.4); }
 .btn-reject {
-    background: rgba(255, 23, 68, 0.2);
+    background: transparent; border: 1px solid var(--dec-block);
     color: var(--dec-block);
 }
-.btn-reject:hover { background: rgba(255, 23, 68, 0.4); }
+.btn-reject:hover { background: var(--dec-block); color: var(--bg-base); }
 
 /* Bottom Row */
 .bottom-row {
@@ -427,7 +424,7 @@ input, select, textarea {
     width: 100%;
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid var(--border-glass);
-    border-radius: 6px;
+    border-radius: 0;
     padding: 10px;
     color: var(--text-main);
     font-family: var(--font-main);
@@ -442,9 +439,9 @@ input:focus, select:focus, textarea:focus {
     width: 100%;
     padding: 10px;
     background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
-    color: #fff;
+    color: var(--text-main);
     border: none;
-    border-radius: 6px;
+    border-radius: 0;
     font-weight: 600;
     cursor: pointer;
     transition: opacity 0.2s ease;
@@ -494,7 +491,7 @@ input:focus, select:focus, textarea:focus {
     font-size: 1.5rem;
     cursor: pointer;
 }
-.close-btn:hover { color: #fff; }
+.close-btn:hover { color: var(--text-main); }
 .modal-body {
     padding: 20px;
     overflow-y: auto;
@@ -512,10 +509,10 @@ input:focus, select:focus, textarea:focus {
     gap: 12px;
 }
 .session-item {
-    background: rgba(255,255,255,0.02);
+    background: var(--bg-base);
     border: 1px solid var(--border-glass);
     padding: 12px;
-    border-radius: 8px;
+    border-radius: 0;
 }
 
 /* Slide in animation for new rows */
@@ -526,3 +523,16 @@ input:focus, select:focus, textarea:focus {
 .new-entry {
     animation: slideIn 0.3s ease forwards;
 }
+
+/* The decision donut is drawn into whatever box the canvas is given. Without one it
+   filled the panel and spilled past it. */
+#decisionChart {
+    max-width: 260px;
+    max-height: 260px;
+}
+
+.chart-panel canvas {
+    max-height: 260px;
+}
+
+/* The wordmark block: ink with the accent rule, matching the landing page mark. */
