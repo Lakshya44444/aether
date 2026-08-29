@@ -14,6 +14,11 @@ _SEVERITY = {
     "SSN": 1.0,
     "CREDIT_CARD": 1.0,
     "API_KEY": 1.0,
+    "IBAN": 1.0,
+    "BANK_ACCOUNT": 1.0,
+    "NATIONAL_ID": 1.0,
+    "MEDICAL_RECORD": 1.0,
+    "PASSPORT": 1.0,
     "ADDRESS": 0.5,
     "EMAIL": 0.4,
     "PHONE": 0.4,
@@ -24,7 +29,21 @@ _PATTERNS = {
     "EMAIL": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
     "PHONE": r'\b(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
     "SSN": r'\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b',
-    "API_KEY": r'\b(sk-[a-zA-Z0-9]{20,}|key_[a-zA-Z0-9]{20,})\b',
+    # Vendors segment their keys (sk-proj-..., sk-ant-...), so the old
+    # `sk-[a-zA-Z0-9]{20,}` stopped at the first hyphen and matched nothing.
+    "API_KEY": r'\b(?:sk|pk|rk|api|key|token)[-_][A-Za-z0-9][A-Za-z0-9\-_]{18,}\b|\bAKIA[0-9A-Z]{16}\b',
+    # Identifiers that only mean anything next to their own label. Matching the bare
+    # digits would flag every order number in the corpus.
+    "MEDICAL_RECORD": r'\b(?i:MRN|medical\s+record\s+(?:number|no\.?))\s*:?\s*#?\s*\d{5,12}\b',
+    "PASSPORT": r'\b(?i:passport\s+(?:number|no\.?))\s*:?\s*[A-Z0-9]{6,9}\b',
+    "BANK_ACCOUNT": r'\b(?i:sort\s+code)\s*:?\s*\d{2}[-\s]?\d{2}[-\s]?\d{2}\b|'
+                    r'\b(?i:account\s+number)\s*:?\s*\d{6,12}\b',
+    # ISO 13616: two letters, two check digits, then up to 30 alphanumerics in groups.
+    "IBAN": r'\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,3})?\b',
+    # UK National Insurance number: two letters, three digit pairs, one suffix letter.
+    # The grouping is what makes it distinctive; restricting the leading letters to the
+    # set real numbers use would reject QQ 12 34 56 C, the example HMRC publishes.
+    "NATIONAL_ID": r'\b[A-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b',
     "IP_ADDRESS": r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b',
     "CREDIT_CARD": r'\b(?:\d{4}[-\s]?){3}\d{4}\b',
 }
@@ -63,6 +82,27 @@ class PrivacyDetector(BaseDetector):
             is_second = not is_second
         return checksum % 10 == 0
 
+    @staticmethod
+    def _is_iban(candidate: str) -> bool:
+        """ISO 7064 mod-97 check.
+
+        The shape alone matches ordinary uppercase text like a ticket reference, so the
+        checksum is what separates an account number from a coincidence.
+        """
+        raw = candidate.replace(" ", "")
+        if not (15 <= len(raw) <= 34):
+            return False
+        rearranged = raw[4:] + raw[:4]
+        digits = ""
+        for char in rearranged:
+            if char.isdigit():
+                digits += char
+            elif char.isalpha():
+                digits += str(ord(char.upper()) - 55)
+            else:
+                return False
+        return int(digits) % 97 == 1
+
     def _is_reportable_ip(self, text: str, match: re.Match) -> bool:
         """Rejects malformed quads, version strings, and private/reserved ranges.
 
@@ -100,6 +140,8 @@ class PrivacyDetector(BaseDetector):
                 if pii_type == "CREDIT_CARD" and not self._luhn_check(match.group()):
                     continue
                 if pii_type == "IP_ADDRESS" and not self._is_reportable_ip(text_to_check, match):
+                    continue
+                if pii_type == "IBAN" and not self._is_iban(match.group()):
                     continue
                 add(pii_type, match)
 
