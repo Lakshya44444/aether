@@ -183,7 +183,7 @@ class CorrectionResult(BaseModel):
 # ╚══════════════════════════════════════════════════════════════════╝
 
 class DecisionTrace(BaseModel):
-    """Complete, immutable record of a single Sentinel decision.
+    """Complete, append-only record of a single Sentinel decision.
 
     Logged for EVERY decision regardless of outcome. Contains:
     detection signals, context, action impact/reversibility,
