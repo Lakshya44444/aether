@@ -1,0 +1,6 @@
+{
+  "_comment": "USD per 1K tokens. Vendor prices change; this is data so updating them is not a code change. Override the file with AETHER_MODEL_PRICING_PATH.",
+  "gpt-4o-mini": { "prompt": 0.00015, "completion": 0.0006 },
+  "gpt-4o":      { "prompt": 0.005,   "completion": 0.015 },
+  "default":     { "prompt": 0.001,   "completion": 0.002 }
+}

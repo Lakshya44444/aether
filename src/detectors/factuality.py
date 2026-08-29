@@ -49,8 +49,9 @@ _ATTRIBUTION = re.compile(
 
 # The heuristic branch cannot see truth, only shape. It is capped below any policy's
 # block threshold so a surface guess can raise a warning but never block on its own;
-# blocking on factuality requires the judge branch.
-_HEURISTIC_CEILING = 0.55
+# blocking on factuality requires the judge branch. Tunable, because what counts as
+# "below every block threshold" depends on the policies actually deployed.
+_HEURISTIC_CEILING = config.factuality_heuristic_ceiling
 
 
 def _split_claims(text: str) -> List[str]:

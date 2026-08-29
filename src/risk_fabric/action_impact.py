@@ -32,6 +32,12 @@ _REVERSIBILITY_SCORE = {
 # Threshold classes, ordered least to most consequential.
 IMPACT_CLASSES = ("routine", "elevated", "severe")
 
+# Where the combined impact+reversibility score is cut into those classes. These are
+# structural rather than operational: moving them re-labels which policy threshold
+# block every action reads, so they are named here and not exposed as settings.
+_ROUTINE_MAX = 3
+_ELEVATED_MAX = 5
+
 
 def get_action_profile(action: ActionType) -> Tuple[ActionImpact, ActionReversibility]:
     """Returns the (Impact, Reversibility) profile for a given action."""
@@ -46,8 +52,8 @@ def get_impact_class(impact: ActionImpact, reversibility: ActionReversibility) -
     severe   — irreversible or critical (delete_record, execute_payment)
     """
     combined = _IMPACT_SCORE.get(impact, 1) + _REVERSIBILITY_SCORE.get(reversibility, 1)
-    if combined <= 3:
+    if combined <= _ROUTINE_MAX:
         return "routine"
-    if combined <= 5:
+    if combined <= _ELEVATED_MAX:
         return "elevated"
     return "severe"

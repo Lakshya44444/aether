@@ -63,8 +63,10 @@ class SessionTracker:
         # a low-stakes use case. This preserves the report's design intent without turning the very first turn
         # into an immediate block in the demo.
         prior_exposure = session.current_exposure
-        damped_turn = current_turn_risk * 0.6
-        session.current_exposure = min(1.0, (prior_exposure * 0.55) + damped_turn)
+        damped_turn = current_turn_risk * config.exposure_turn_weight
+        session.current_exposure = min(
+            1.0, (prior_exposure * config.exposure_decay) + damped_turn
+        )
 
         # compute trajectory using a sliding window
         trajectory = Trajectory.STABLE
@@ -76,9 +78,9 @@ class SessionTracker:
             avg_recent = sum(recent) / window
             avg_prev = sum(prev) / window
 
-            if avg_recent > avg_prev + 0.05:
+            if avg_recent > avg_prev + config.trajectory_delta:
                 trajectory = Trajectory.RISING
-            elif avg_recent < avg_prev - 0.05:
+            elif avg_recent < avg_prev - config.trajectory_delta:
                 trajectory = Trajectory.FALLING
 
         session.trajectory = trajectory

@@ -226,9 +226,9 @@ async def test_cost_is_scoped_per_session():
 @pytest.mark.asyncio
 async def test_retry_tracking_is_bounded():
     detector = CostDetector()
-    for i in range(CostDetector.MAX_TRACKED_PROMPTS + 200):
+    for i in range(detector.max_tracked_prompts + 200):
         await detector.detect(f"prompt {i}", "reply", session_id="s")
-    assert len(detector.session_inputs["s"]) <= CostDetector.MAX_TRACKED_PROMPTS
+    assert len(detector.session_inputs["s"]) <= detector.max_tracked_prompts
 
 
 @pytest.mark.asyncio

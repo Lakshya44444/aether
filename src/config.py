@@ -38,6 +38,33 @@ class AetherConfig(BaseSettings):
     cost_warn_usd: float = 0.50
     cost_block_usd: float = 2.00
     cost_retry_escalate_count: int = 3
+    # Bounds the per-session retry table so a long session cannot grow without limit.
+    max_tracked_prompts: int = 512
+    # USD per 1K tokens. Empty means the table shipped beside the cost detector.
+    model_pricing_path: str = ""
+
+    # ── Risk fabric ──────────────────────────────────────────────
+    # Session exposure is a damped governance heuristic, not a probability. These two
+    # weights are what "damped" means: how much of this turn's risk is added, and how
+    # much of the accumulated exposure carries into the next turn.
+    exposure_turn_weight: float = 0.6
+    exposure_decay: float = 0.55
+    # How much the windowed average must move before a session is called rising or
+    # falling rather than stable.
+    trajectory_delta: float = 0.05
+
+    # ── Policy fallbacks ─────────────────────────────────────────
+    # Applied only when a policy file declares no thresholds for a category.
+    default_warn_threshold: float = 0.5
+    default_block_threshold: float = 0.8
+
+    # ── Detector ceilings ────────────────────────────────────────
+    # Caps on branches that infer from surface shape rather than evidence. Both sit
+    # below the block thresholds in every shipped policy, so a pattern match or a
+    # surface guess can raise a decision but never stop traffic on its own. Raising
+    # either above a policy's block threshold changes that guarantee.
+    factuality_heuristic_ceiling: float = 0.55
+    injection_ceiling: float = 0.70
 
     # ── Session Tracking ─────────────────────────────────────────
     max_session_exposure: float = 1.0
@@ -60,6 +87,12 @@ class AetherConfig(BaseSettings):
 
     # ── Policy directory ─────────────────────────────────────────
     policies_dir: str = "src/policy_engine/policies"
+
+    # ── Static UI ────────────────────────────────────────────────
+    # Empty means: use the built frontend export if it exists, otherwise the plain
+    # dashboard. Both are resolved against the repository root rather than the working
+    # directory, so the gateway serves its UI whatever you start it from.
+    frontend_dir: str = ""
 
     model_config = {"env_prefix": "AETHER_"}
 

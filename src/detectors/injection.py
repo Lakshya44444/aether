@@ -45,7 +45,7 @@ _PATTERNS = {
 # A pattern match is evidence of an attempt, never proof of a successful one. Capping
 # below every configured block threshold keeps this detector on the escalate/deny-review
 # path rather than letting a regex block traffic outright.
-_CEILING = 0.7
+_CEILING = config.injection_ceiling
 
 
 class InjectionDetector(BaseDetector):

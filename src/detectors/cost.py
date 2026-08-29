@@ -1,3 +1,5 @@
+import json
+import os
 import time
 from collections import Counter
 from typing import Any, Dict
@@ -10,18 +12,27 @@ from src.config import config
 class CostDetector(BaseDetector):
     """Cost estimation and retry tracking detector."""
 
-    # Bounds the per-session retry table. A session that asks more distinct questions
-    # than this stops counting retries rather than growing without limit.
-    MAX_TRACKED_PROMPTS = 512
-
     def __init__(self) -> None:
         self.session_costs: Dict[str, float] = {}
         self.session_inputs: Dict[str, Counter] = {}
-        self.pricing = {
-            "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
-            "gpt-4o": {"prompt": 0.005, "completion": 0.015},
-            "default": {"prompt": 0.001, "completion": 0.002}
-        }
+        # Bounds the per-session retry table. A session that asks more distinct
+        # questions than this stops counting retries rather than growing without limit.
+        self.max_tracked_prompts = config.max_tracked_prompts
+        self.pricing = self._load_pricing()
+
+    @staticmethod
+    def _load_pricing() -> Dict[str, Dict[str, float]]:
+        """Reads the per-1K-token price table.
+
+        Vendor prices change and have nothing to do with this code, so they live in a
+        JSON file rather than in a dict here. `default` is what an unknown model costs.
+        """
+        path = config.model_pricing_path or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "model_pricing.json"
+        )
+        with open(path, "r", encoding="utf-8") as f:
+            table = json.load(f)
+        return {k: v for k, v in table.items() if not k.startswith("_")}
 
     @property
     def category(self) -> str:
@@ -45,7 +56,7 @@ class CostDetector(BaseDetector):
         # a long session quadratic in the number of turns.
         seen = self.session_inputs.setdefault(session_id, Counter())
         retry_count = seen[input_text]
-        if retry_count or len(seen) < self.MAX_TRACKED_PROMPTS:
+        if retry_count or len(seen) < self.max_tracked_prompts:
             seen[input_text] += 1
 
         prompt_tokens = self._estimate_tokens(input_text)

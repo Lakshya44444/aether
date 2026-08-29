@@ -13,7 +13,10 @@ _SEVERITY_ORDER = {
     Decision.BLOCK: 4,
 }
 
-_DEFAULT_THRESHOLDS = {"warn": 0.5, "block": 0.8}
+# Applied only where a policy file declares nothing for a category.
+def _default_thresholds() -> Dict[str, float]:
+    return {"warn": config.default_warn_threshold,
+            "block": config.default_block_threshold}
 
 _DEFAULT_POLICY = {
     "policy_id": "default",
@@ -51,13 +54,13 @@ class PolicyEngine:
         """
         by_category = policy.get("thresholds", {}).get(category)
         if not by_category:
-            return dict(_DEFAULT_THRESHOLDS)
+            return _default_thresholds()
         if impact_class in by_category:
             return by_category[impact_class]
         # A flat {"warn": x, "block": y} block still works, applied to every action.
         if "warn" in by_category or "block" in by_category:
-            return {**_DEFAULT_THRESHOLDS, **by_category}
-        return dict(_DEFAULT_THRESHOLDS)
+            return {**_default_thresholds(), **by_category}
+        return _default_thresholds()
 
     def evaluate(self, risk_assessment: RiskAssessment) -> Tuple[Decision, str, str]:
         """Evaluates the risk assessment against the policy.
@@ -84,8 +87,8 @@ class PolicyEngine:
             for result in risk_assessment.detection_results:
                 cat_str = result.category.value
                 thresholds = self._thresholds_for(policy, cat_str, impact_class)
-                warn_thresh = thresholds.get("warn", 0.5)
-                block_thresh = thresholds.get("block", 0.8)
+                warn_thresh = thresholds.get("warn", config.default_warn_threshold)
+                block_thresh = thresholds.get("block", config.default_block_threshold)
 
                 current_decision = Decision.ALLOW
                 if result.score >= block_thresh:
