@@ -1,7 +1,7 @@
 import os
 import json
 from typing import Dict, Any, Tuple
-from src.models.schemas import RiskAssessment, Decision, ActionType, RiskTier
+from src.models.schemas import RiskAssessment, Decision, ActionType, RiskTier, Trajectory
 from src.risk_fabric.action_impact import get_impact_class
 from src.config import config
 
@@ -106,6 +106,14 @@ class PolicyEngine:
                         f"{current_decision.value}"
                     )
 
+            # What the detectors alone justify, before any action- or session-level
+            # upgrade. The severe fail-safe below has to test this rather than the
+            # running worst_decision, or it re-reads its own mandatory-review ESCALATE
+            # as "an active risk signal" and blocks every irreversible action --
+            # including ones where all four detector scores are 0.00, which also put a
+            # false statement in the audit record.
+            detection_decision = worst_decision
+
             # Actions the policy always routes past a human. REDACT is included in the
             # upgradeable set: masking a value does not make an irreversible action safe.
             mandatory_actions = policy.get("mandatory_human_review_actions", [])
@@ -129,11 +137,25 @@ class PolicyEngine:
                         f"maximum allowed ({max_exposure})"
                     )
 
+            # A rising session that is already warning is heading somewhere worse. This is
+            # the one place trajectory changes an outcome; without it every ESCALATE came
+            # from the static mandatory-review list and content never influenced one.
+            if (
+                risk_assessment.trajectory == Trajectory.RISING
+                and _SEVERITY_ORDER[worst_decision] >= _SEVERITY_ORDER[Decision.WARN]
+                and _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.ESCALATE]
+            ):
+                worst_decision = Decision.ESCALATE
+                reasons.append(
+                    f"Session risk is rising (turn risk {risk_assessment.current_turn_risk:.2f}, "
+                    f"exposure {risk_assessment.session_exposure:.2f}) while already flagged"
+                )
+
             # An irreversible, high-impact action carrying any live flag is never released
             # on a decision weaker than BLOCK.
             if (
                 impact_class == "severe"
-                and worst_decision != Decision.ALLOW
+                and detection_decision != Decision.ALLOW
                 and _SEVERITY_ORDER[worst_decision] < _SEVERITY_ORDER[Decision.BLOCK]
             ):
                 worst_decision = Decision.BLOCK
