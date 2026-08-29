@@ -3,6 +3,7 @@
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { API_BASE, cn } from "@/lib/utils";
+import measured from "@/lib/measured.json";
 
 const LADDER = ["ALLOW", "WARN", "REDACT", "ESCALATE", "BLOCK"] as const;
 type Decision = (typeof LADDER)[number];
@@ -15,36 +16,20 @@ const ON_BG: Record<Decision, string> = {
   BLOCK: "bg-block",
 };
 
-/* One sentence, three consequences. The output text never changes. */
-const OUTPUT = "Your balance is $8,400 and the transfer was approved by the CFO.";
-const INPUT = "Can you move the remaining balance to the vendor account?";
+/* One sentence, three consequences. The output text never changes.
 
-const CONTEXTS = [
-  { key: "customer_support", action: "generate_text", label: "Support chatbot", sub: "generate_text" },
-  { key: "internal_copilot", action: "update_crm", label: "Internal copilot", sub: "update_crm" },
-  { key: "finance_agent", action: "execute_payment", label: "Finance agent", sub: "execute_payment" },
-] as const;
+   Sample, contexts and the offline fallback all come from measured.json, which
+   scripts/export_metrics.py produces by driving the real pipeline. Hand-copying a
+   "recorded run" into this file is how the fallback ends up describing behaviour the
+   system no longer has. */
+const { input: INPUT, output: OUTPUT, contexts: CONTEXTS } = measured.sample;
 
-/* Recorded from a real run, used only when the API is unreachable — and the UI
-   says so rather than passing these off as live. */
-const RECORDED: Record<string, { decision: Decision; reason: string; scores: Record<string, number> }> = {
-  customer_support: {
-    decision: "WARN",
-    reason: "Factuality score 0.50 at routine impact (warn 0.45, block 0.95) triggered WARN",
-    scores: { factuality: 0.5, privacy: 0, bias: 0, cost: 0 },
-  },
-  internal_copilot: {
-    decision: "ESCALATE",
-    reason:
- "Factuality score 0.50 at elevated impact (warn 0.45, block 0.75) triggered WARN; Action update_crm requires mandatory human review",
-    scores: { factuality: 0.5, privacy: 0, bias: 0, cost: 0 },
-  },
-  finance_agent: {
-    decision: "BLOCK",
-    reason: "Factuality score 0.50 at severe impact (warn 0.2, block 0.45) triggered BLOCK",
-    scores: { factuality: 0.5, privacy: 0, bias: 0, cost: 0 },
-  },
-};
+/* Used only when the API is unreachable — and the UI says so rather than passing
+   these off as live. */
+const RECORDED = measured.sample.recorded as Record<
+  string,
+  { decision: Decision; reason: string; scores: Record<string, number> }
+>;
 
 type Result = { decision: Decision; reason: string; scores: Record<string, number>; live: boolean };
 type Loaded = Result & { ctx: string };
