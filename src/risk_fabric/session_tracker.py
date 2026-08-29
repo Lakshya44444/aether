@@ -1,8 +1,8 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 
-from src.models.schemas import UseCase, DetectionResult, Trajectory, SessionInfo
+from src.models.schemas import UseCase, DetectionResult, Decision, Trajectory, SessionInfo
 from src.config import config
 
 
@@ -16,6 +16,7 @@ class SessionState(BaseModel):
     current_exposure: float = 0.0
     trajectory: Trajectory = Trajectory.STABLE
     risk_history: List[float] = Field(default_factory=list)
+    last_decision: Optional[Decision] = None
     created_at: datetime = Field(default_factory=_utcnow)
     last_seen: datetime = Field(default_factory=_utcnow)
 
@@ -84,6 +85,14 @@ class SessionTracker:
 
         return current_turn_risk, session.current_exposure, trajectory
 
+    def record_decision(self, session_id: str, decision: Decision) -> None:
+        """Stores the outcome so the dashboard can show what a session actually got.
+
+        `SessionInfo.last_decision` was declared and never populated.
+        """
+        if session_id in self.sessions:
+            self.sessions[session_id].last_decision = decision
+
     def get_session_info(self, session_id: str) -> SessionInfo:
         """Returns session info for the dashboard."""
         if session_id not in self.sessions:
@@ -97,5 +106,6 @@ class SessionTracker:
             turn_count=s.turn_count,
             current_exposure=s.current_exposure,
             trajectory=s.trajectory,
+            last_decision=s.last_decision,
             created_at=s.created_at
         )
