@@ -326,10 +326,30 @@ async def get_stats():
 async def get_session(session_id: str):
     return session_tracker.get_session_info(session_id)
 
-# Serve the built Next.js frontend when it exists, falling back to the legacy
-# static dashboard so the gateway still has a UI before the frontend is built.
-_FRONTEND = "frontend/out" if os.path.exists("frontend/out") else "dashboard"
-if os.path.exists(_FRONTEND):
+# Serve the built Next.js frontend when it exists, falling back to the legacy static
+# dashboard so the gateway still has a UI before the frontend is built.
+#
+# Resolved against the repository root, not the working directory. These used to be
+# bare relative paths, so starting uvicorn from anywhere but the repo root served no UI
+# at all and 404'd the console -- a footgun that had to be documented instead of fixed.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_frontend_dir() -> str:
+    if config.frontend_dir:
+        configured = config.frontend_dir
+        if not os.path.isabs(configured):
+            configured = os.path.join(_REPO_ROOT, configured)
+        return configured
+    for candidate in ("frontend/out", "dashboard"):
+        path = os.path.join(_REPO_ROOT, candidate)
+        if os.path.isdir(path):
+            return path
+    return ""
+
+
+_FRONTEND = _resolve_frontend_dir()
+if _FRONTEND and os.path.isdir(_FRONTEND):
     app.mount("/", StaticFiles(directory=_FRONTEND, html=True), name="frontend")
 
 
