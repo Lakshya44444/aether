@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  /* Warm paper rather than cool grey. Grey-blue surfaces with soft shadows are the
+     default look of every generated dashboard; ink on stock is a decision. */
+  --color-paper:   #FCF8F0;
+  --color-card:    #F6F0E2;
+  --color-sunk:    #F1EAD9;
+  --color-ink:     #1A140F;
+  --color-ink-2:   #4A3F35;
+  --color-mute:    #8A7D6D;
+  --color-rule:    #DDD3C0;
+  --color-rule-2:  #EAE2D2;
+
+  /* Five states, five colours, used for nothing else. Weighted for a warm ground:
+     the same hues on cool grey read as a status LED strip. */
+  --color-allow:    #0B7A52;
+  --color-warn:     #A8690C;
+  --color-redact:   #1F5C8C;
+  --color-escalate: #C2410C;
+  --color-block:    #C8102E;
+
+  --font-display: var(--font-dm-serif), Georgia, serif;
+  --font-sans:    var(--font-syne), ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    var(--font-jetbrains), ui-monospace, Menlo, monospace;
+
+  --animate-blink: blink 1.4s steps(2, start) infinite;
+}
+
+@keyframes blink { 50% { opacity: 0; } }
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+  body {
+    /* A drafting grid, ruled all the way through rather than faded into a vignette.
+       The fade is what makes a background read as decoration. */
+    background-color: var(--color-paper);
+    background-image:
+      linear-gradient(var(--color-rule-2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-rule-2) 1px, transparent 1px);
+    background-size: 40px 40px;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  /* Square by default. Every radius in this build is deliberate and none exceeds 2px,
+     except a status dot, which is a dot. */
+  *, *::before, *::after { border-radius: 0; }
+
+  :focus-visible { outline: 1px solid var(--color-block); outline-offset: 3px; }
+
+  ::selection { background: var(--color-block); color: var(--color-paper); }
+}
+
+@layer utilities {
+  /* Label type: small, uppercase, widely tracked, monospaced. Carries hierarchy so
+     the headings do not have to be large to be read as headings. */
+  .label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    line-height: 1;
+  }
+
+  .rule-dashed { border-style: dashed; }
+
+  /* The five states as hard stops. A blend would imply a continuum; they are discrete. */
+  .spectrum {
+    background: linear-gradient(90deg,
+      var(--color-allow)    0%  20%, var(--color-warn)     20% 40%,
+      var(--color-redact)   40% 60%, var(--color-escalate) 60% 80%,
+      var(--color-block)    80% 100%);
+  }
+
+  .spectrum-v {
+    background: linear-gradient(180deg,
+      var(--color-allow)    0%  20%, var(--color-warn)     20% 40%,
+      var(--color-redact)   40% 60%, var(--color-escalate) 60% 80%,
+      var(--color-block)    80% 100%);
+  }
+
+  .dot { border-radius: 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
