@@ -6,3 +6,19 @@ __pycache__/
 .DS_Store
 sentinel_audit.db
 *.log
+
+# Frontend
+frontend/node_modules/
+frontend/out/
+frontend/.next/
+
+# Working notes. Kept locally, not published: these are the audit trail of how the
+# repo got here, not documentation anyone cloning it needs.
+ARCHITECTURE.md
+CHANGES.md
+HANDOFF.md
+RESEARCH_REFERENCES.md
+RUNNING.md
+frontend/AGENTS.md
+frontend/CLAUDE.md
+frontend/README.md
