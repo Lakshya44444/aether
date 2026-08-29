@@ -1,8 +1,8 @@
-# Sentinel
+# Aether
 
 Runtime governance for AI systems that take actions.
 
-Sentinel sits between a model and whatever the model is about to do. It scores the
+Aether sits between a model and whatever the model is about to do. It scores the
 output, weighs it against the action being requested and the session it belongs to,
 and returns one of five decisions — `ALLOW`, `WARN`, `REDACT`, `ESCALATE`, `BLOCK` —
 with a signed trace of how it got there.
@@ -37,7 +37,7 @@ internal copilot, and an incident when it accompanies a payment. What separates 
 is not the words — it is **what the system is about to do with them, and whether that
 can be undone**.
 
-Sentinel scores `impact × reversibility` and uses it to select which thresholds apply.
+Aether scores `impact × reversibility` and uses it to select which thresholds apply.
 
 | Action | Impact | Reversibility | Class |
 |---|---|---|---|
@@ -56,38 +56,30 @@ anything.
 ## Pipeline
 
 ```mermaid
-flowchart TD
-    REQ["POST /api/evaluate"] --> CTX["load policy, resolve risk tier"]
-    CTX --> ROUTE["Verification router<br/>tier x impact -> shallow / medium / deep"]
+flowchart TB
+    REQ["<b>POST /api/evaluate</b> — input · output · use case · action · session<br/>load policy · resolve risk tier · route verification depth"]
 
-    ROUTE --> DET
-    subgraph DET["Detectors — one latency budget, from the policy"]
-        direction LR
-        F["Factuality<br/>evidence · judge · heuristic"]
-        P["Privacy<br/>PII, financial, national id"]
-        B["Bias<br/>explicit + coded proxy"]
-        C["Cost<br/>session spend, retries"]
-        I["Injection<br/>input side"]
-    end
+    D1["<b>Factuality</b><br/>evidence · judge · heuristic"]
+    D2["<b>Privacy</b><br/>PII · financial · national id"]
+    D3["<b>Bias</b><br/>explicit · coded proxy"]
+    D4["<b>Cost</b><br/>session spend · retries"]
+    D5["<b>Injection</b><br/>the prompt, not the reply"]
 
-    DET --> FAB["Risk fabric<br/>turn risk · session exposure · trajectory"]
-    FAB --> POL{"Policy engine<br/>thresholds by category x impact class"}
-    POL --> DEC["ALLOW · WARN · REDACT · ESCALATE · BLOCK"]
+    POL["<b>Risk fabric</b> — turn risk · session exposure · trajectory<br/><b>Policy engine</b> — thresholds by category × impact class<br/>a detector that failed or timed out takes the policy fail_mode"]
 
-    FAIL["detector failed or timed out<br/>-> policy fail_mode"] --> DEC
-    DET -.-> FAIL
+    DEC["<b>ALLOW</b> · <b>WARN</b> · <b>REDACT</b> · <b>ESCALATE</b> · <b>BLOCK</b>"]
 
-    DEC -->|REDACT| MASK["mask flagged spans"]
-    DEC -->|BLOCK / ESCALATE| CORR["Correction<br/>CoVe · bias resample"]
-    CORR --> REV{"re-verify:<br/>same detectors, same policy"}
-    REV -->|lands softer| ACCEPT["accept, floor at WARN"]
-    REV -->|does not| KEEP["discard, original stands"]
+    MASK["<b>Mask flagged spans</b><br/>at the offsets the detector reported"]
+    CORR["<b>Correct, then re-verify</b> — same detectors, same policy<br/>kept only if it lands softer, and floored at WARN"]
 
-    DEC --> AUDIT[("Audit log<br/>SHA-256 hash chain")]
+    AUDIT[("<b>Hash-chained audit log</b> → response + decision trace")]
+
+    REQ --> D1 & D2 & D3 & D4 & D5 --> POL --> DEC
+    DEC -->|REDACT| MASK
+    DEC -->|BLOCK · ESCALATE| CORR
+    DEC -->|ALLOW · WARN| AUDIT
     MASK --> AUDIT
-    ACCEPT --> AUDIT
-    KEEP --> AUDIT
-    AUDIT --> RESP["response + decision trace"]
+    CORR --> AUDIT
 ```
 
 Three properties worth naming, because each one is a place this kind of system
@@ -128,7 +120,7 @@ is relative.
 Four connected scenarios, showing a session escalate across turns:
 
 ```bash
-SENTINEL_AUDIT_DB_PATH=/tmp/demo.db .venv/bin/python demo/run_demo.py
+AETHER_AUDIT_DB_PATH=/tmp/demo.db .venv/bin/python demo/run_demo.py
 ```
 
 ### Frontend
@@ -224,23 +216,23 @@ Known gaps are recorded in `evals/gates.json` instead of being tuned away.
 
 ## Configuration
 
-Every field in `src/config.py` is settable through a `SENTINEL_`-prefixed environment
+Every field in `src/config.py` is settable through a `AETHER_`-prefixed environment
 variable.
 
 ```bash
-SENTINEL_PORT=8000
-SENTINEL_AUDIT_DB_PATH=/var/lib/sentinel/audit.db
-SENTINEL_MAX_TEXT_CHARS=100000        # request cap; detection is linear in length
-SENTINEL_POLICIES_DIR=src/policy_engine/policies
+AETHER_PORT=8000
+AETHER_AUDIT_DB_PATH=/var/lib/aether/audit.db
+AETHER_MAX_TEXT_CHARS=100000        # request cap; detection is linear in length
+AETHER_POLICIES_DIR=src/policy_engine/policies
 ```
 
 Offline, factuality falls back to a surface heuristic capped at 0.55 — it can warn,
 never block on its own. To enable SelfCheckGPT-style consistency sampling:
 
 ```bash
-SENTINEL_DEMO_MODE=false
-SENTINEL_LLM_API_KEY=sk-...
-SENTINEL_JUDGE_MODEL=gpt-4o-mini      # never the model that produced the output
+AETHER_DEMO_MODE=false
+AETHER_LLM_API_KEY=sk-...
+AETHER_JUDGE_MODEL=gpt-4o-mini      # never the model that produced the output
 ```
 
 ---
@@ -270,7 +262,7 @@ A prototype that is honest about its edges, rather than a product.
 ```
 src/
   main.py               FastAPI gateway; the pipeline lives here
-  config.py             every knob, SENTINEL_-prefixed
+  config.py             every knob, AETHER_-prefixed
   models/schemas.py     the shared contract
   detectors/            factuality, privacy, bias, cost, injection, judge client
   risk_fabric/          session exposure, trajectory, action profiles
