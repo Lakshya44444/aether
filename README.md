@@ -45,11 +45,11 @@ can be undone**.
 
 Aether scores `impact × reversibility` and uses it to select which thresholds apply.
 
-| Action | Impact | Reversibility | Class |
-|---|---|---|---|
-| `generate_text`, `draft_email` | low | high | `routine` |
-| `send_email`, `update_crm` | medium | medium | `elevated` |
-| `delete_record`, `execute_payment` | high / critical | low / very low | `severe` |
+| Action                             | Impact          | Reversibility  | Class      |
+| ---------------------------------- | --------------- | -------------- | ---------- |
+| `generate_text`, `draft_email`     | low             | high           | `routine`  |
+| `send_email`, `update_crm`         | medium          | medium         | `elevated` |
+| `delete_record`, `execute_payment` | high / critical | low / very low | `severe`   |
 
 A privacy score of 0.40 is a warning on `generate_text` and a block on
 `execute_payment`, from the same detector output and the same policy file. Thresholds
@@ -173,16 +173,16 @@ npm run dev        # or :3000 with hot reload against the API on :8000
 
 ## API
 
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/evaluate` | POST | Full pipeline. Returns decision, reason, trace, corrected output |
-| `/api/evaluate/input` | POST | Input guardrail alone — redacts PII, refuses injection |
-| `/api/traces` | GET | Recent decision traces |
-| `/api/traces/{id}` | GET | One trace |
-| `/api/review` | POST | Human verdict on an escalated case |
-| `/api/audit/verify` | GET | Recompute the hash chain, report the first bad row |
-| `/api/stats` | GET | Decision counts, latency, alert-to-incident rate |
-| `/api/sessions/{id}` | GET | Exposure, trajectory, last decision |
+| Endpoint              | Method | Purpose                                                          |
+| --------------------- | ------ | ---------------------------------------------------------------- |
+| `/api/evaluate`       | POST   | Full pipeline. Returns decision, reason, trace, corrected output |
+| `/api/evaluate/input` | POST   | Input guardrail alone — redacts PII, refuses injection           |
+| `/api/traces`         | GET    | Recent decision traces                                           |
+| `/api/traces/{id}`    | GET    | One trace                                                        |
+| `/api/review`         | POST   | Human verdict on an escalated case                               |
+| `/api/audit/verify`   | GET    | Recompute the hash chain, report the first bad row               |
+| `/api/stats`          | GET    | Decision counts, latency, alert-to-incident rate                 |
+| `/api/sessions/{id}`  | GET    | Exposure, trajectory, last decision                              |
 
 `/api/evaluate` screens the prompt as well as the completion. Input-side findings are
 tagged, because their offsets index the prompt and must not reach the output
@@ -196,11 +196,11 @@ One JSON file per use case in `src/policy_engine/policies/`, holding thresholds 
 category per impact class, the actions that always meet a human, a session exposure
 ceiling, a latency budget, and a fail mode.
 
-| Use case | Tier | Fail mode | PII | Budget |
-|---|---|---|---|---|
-| `customer_support` | limited | fail open | redact | 300 ms |
-| `internal_copilot` | high | fail closed | redact | 500 ms |
-| `finance_agent` | high | fail closed | block | 1000 ms |
+| Use case           | Tier    | Fail mode   | PII    | Budget  |
+| ------------------ | ------- | ----------- | ------ | ------- |
+| `customer_support` | limited | fail open   | redact | 300 ms  |
+| `internal_copilot` | high    | fail closed | redact | 500 ms  |
+| `finance_agent`    | high    | fail closed | block  | 1000 ms |
 
 `customer_support` fails open because a support reply blocked by a crashed detector is
 a worse outcome than one that slipped through. `finance_agent` fails closed for the
@@ -235,13 +235,13 @@ is unmet, so it works as a CI gate.
 
 ### Measured, on the held-out split
 
-| Detector | n | Precision | Recall | F1 | FPR |
-|---|---|---|---|---|---|
-| privacy | 18 | 0.91 | 0.91 | 0.91 | 0.14 |
-| bias | 14 | 1.00 | 1.00 | 1.00 | 0.00 |
-| injection | 9 | 1.00 | 1.00 | 1.00 | 0.00 |
-| factuality (evidence) | 6 | 1.00 | 0.67 | 0.80 | 0.00 |
-| factuality (heuristic) | 4 | 1.00 | 0.50 | 0.67 | 0.00 |
+| Detector               | n   | Precision | Recall | F1   | FPR  |
+| ---------------------- | --- | --------- | ------ | ---- | ---- |
+| privacy                | 18  | 0.91      | 0.91   | 0.91 | 0.14 |
+| bias                   | 14  | 1.00      | 1.00   | 1.00 | 0.00 |
+| injection              | 9   | 1.00      | 1.00   | 1.00 | 0.00 |
+| factuality (evidence)  | 6   | 1.00      | 0.67   | 0.80 | 0.00 |
+| factuality (heuristic) | 4   | 1.00      | 0.50   | 0.67 | 0.00 |
 
 End to end: 13 cases, exact decision match 1.00, zero below the safety floor, p50
 3 ms, p95 122 ms against budgets of 300–1000 ms.

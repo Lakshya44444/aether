@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import aiosqlite
 from typing import Optional, List
 from src.models.schemas import DecisionTrace, DashboardStats
@@ -26,7 +27,10 @@ class AuditLogger:
         self._chain_lock = asyncio.Lock()
 
     async def init_db(self):
-        """Create SQLite tables if they do not exist."""
+        """Create the parent directory and SQLite tables if they do not exist."""
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS decision_traces (

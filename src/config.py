@@ -5,6 +5,9 @@ Application configuration.
 All settings can be overridden via environment variables prefixed with AETHER_.
 For example: AETHER_DEMO_MODE=false, AETHER_LLM_API_KEY=sk-...
 """
+import os
+import tempfile
+
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -72,7 +75,9 @@ class AetherConfig(BaseSettings):
     trajectory_window_turns: int = 3
 
     # ── Audit / Storage ──────────────────────────────────────────
-    audit_db_path: str = "aether_audit.db"
+    # Default to a writable temp directory so local runs do not fail on machines where
+    # the repo root or current working directory is on a full or restricted volume.
+    audit_db_path: str = os.path.join(tempfile.gettempdir(), "aether_audit.db")
 
     # ── Request limits (trust boundary) ──────────────────────────
     # Detection is regex-bound and linear in input length, so an uncapped body is a
