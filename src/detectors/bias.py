@@ -33,6 +33,30 @@ _PATTERNS = {
         rf'\bact\s+like\s+a\s+man\b',
         rf'\bwomen{_APOS}?s?\s+work\b',
     ],
+    # Bias that never names the protected trait. These carry the same hiring
+    # consequence as the explicit patterns above and were the largest miss class in
+    # the eval set: none of them contain a demographic word at all.
+    "coded_proxy": [
+        # A whole group generalised into a deficiency.
+        r'\b(?:older|younger|elderly|young|senior|junior)\s+'
+        r'(?:candidates?|applicants?|workers?|employees?|people|staff|graduates?|hires?)\s+'
+        r'(?:simply\s+|generally\s+|usually\s+|often\s+)?'
+        r'(?:cannot|can\'t|can not|lack|struggle|rarely|tend|are\s+(?:less|not|rarely))\b',
+        # Caregiver status used as a proxy for commitment or availability.
+        r'\b(?:working\s+)?(?:mothers?|fathers?|parents?|pregnant\s+\w+)\s+'
+        r'(?:tend|are|is|rarely|usually|often|generally)\b',
+        # Praise conditioned on group membership -- "articulate for someone from ...".
+        r'\b(?:surprisingly|unusually|remarkably)\s+\w+(?:\s+\w+)?\s+for\s+'
+        r'(?:a|an|someone|somebody|his|her|their)\b',
+        r'\b(?:articulate|well[-\s]spoken|eloquent|intelligent|competent)\s+for\s+'
+        r'(?:a|an|someone|somebody)\b',
+        # Origin or institution generalised into ability.
+        r'\b(?:candidates?|applicants?|people|students?|graduates?|they)\s+from\s+'
+        r'(?:that|those|this|these)\s+\w+\s+(?:are|tend)\s+'
+        r'(?:typically|usually|generally|often|to\s+be)\b',
+        # "Culture fit" as the stated reason for a rejection.
+        r'\b(?:not|isn\'t|is\s+not|aren\'t|are\s+not)\s+(?:really\s+)?(?:a\s+)?culture\s+fit\b',
+    ],
     "age_bias": [
         rf'\b{_PERSON}\s+(?:is|are|was|were|seems?|looks?)\s+(?:too\s+old|too\s+young|past\s+(?:his|her|their)\s+prime)\b',
         rf'\b(?:too\s+old|too\s+young)\s+(?:for\s+(?:the|this|that)\s+(?:role|job|position|team)|to\s+(?:be\s+)?(?:hired?|promoted?))\b',
@@ -42,6 +66,7 @@ _PATTERNS = {
 _SEVERITY = {
     "consequential": 0.8,
     "stereotyping": 0.6,
+    "coded_proxy": 0.6,
     "gender_bias": 0.5,
     "age_bias": 0.5,
 }
