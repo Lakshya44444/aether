@@ -1,5 +1,63 @@
 // Aether Dashboard App Logic
 
+// --- Runtime configuration ---------------------------------------------------
+// Nothing about where the API lives is baked into this file.
+//
+// Served by the gateway (production), the console is same-origin and needs no base
+// at all. Under `npm run dev` the page is on :3000 while the API is on :8000, and a
+// bare "/api/stats" resolves against the dev server, which does not implement it --
+// that is where the 404s came from. Next.js cannot help here: it does not process
+// files in public/, so NEXT_PUBLIC_* never reaches this script.
+//
+// Resolution order, first match wins:
+//   1. #api=   hash fragment          — survives .html-stripping redirects
+//   2. ?api=   query parameter        — convenient where nothing rewrites the URL
+//   3. window.AETHER_API_BASE         — set by any script that loads before this one
+//   4. <meta name="aether-api-base">  — set at deploy time
+//   5. same origin                    — production default
+//
+// Both URL forms exist because static hosts differ. `serve` 301-redirects
+// /console.html to /console and drops the query string with it, so a query-only
+// override silently resolves to same-origin and you are back to the 404s. Browsers
+// carry the fragment across a redirect, so #api= survives what ?api= does not.
+function trimSlash(value) {
+    return value.replace(/\/+$/, '');
+}
+
+function resolveApiBase() {
+    const fromHash = new URLSearchParams(location.hash.replace(/^#/, '')).get('api');
+    if (fromHash !== null) return trimSlash(fromHash);
+
+    const fromQuery = new URLSearchParams(location.search).get('api');
+    if (fromQuery !== null) return trimSlash(fromQuery);
+
+    if (typeof window.AETHER_API_BASE === 'string') return trimSlash(window.AETHER_API_BASE);
+
+    const meta = document.querySelector('meta[name="aether-api-base"]');
+    if (meta && meta.content) return trimSlash(meta.content);
+
+    return '';
+}
+
+const API_BASE = resolveApiBase();
+
+/** Builds an API URL. Every request in this file goes through here. */
+function api(path) {
+    return `${API_BASE}${path}`;
+}
+
+function numberParam(name, fallback) {
+    const params = new URLSearchParams(location.search);
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+    const raw = hash.get(name) ?? params.get(name);
+    const parsed = raw === null ? NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// How often the feed refreshes, and how long to wait before re-reading after a write.
+const POLL_INTERVAL_MS = numberParam('poll', 5000);
+const REFRESH_DELAY_MS = numberParam('refresh', 500);
+
 // --- Constants & Demo Data ---
 const DECISIONS = {
     ALLOW: { label: 'ALLOW', class: 'dec-allow' },
@@ -9,43 +67,27 @@ const DECISIONS = {
     BLOCK: { label: 'BLOCK', class: 'dec-block' }
 };
 
-// The five decision colours, matching the policy states elsewhere in the product.
-// Canvas cannot read a CSS custom property, so these are the one place the palette
-// is repeated -- keep them in step with :root in styles.css.
+// Canvas cannot read a CSS custom property directly, but it can be handed the
+// computed value of one. Resolving them here means styles.css is the single
+// definition of the palette and this file cannot drift out of step with it.
+function cssVar(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+}
+
 const CHART_COLORS = {
-    ALLOW: '#0B7A52',
-    WARN: '#A8690C',
-    REDACT: '#1F5C8C',
-    ESCALATE: '#C2410C',
-    BLOCK: '#C8102E',
-    FACTUALITY: '#4A3F35',
-    PRIVACY: '#1F5C8C',
-    BIAS: '#C2410C',
-    COST: '#8A7D6D'
+    get ALLOW()      { return cssVar('--dec-allow', '#0B7A52'); },
+    get WARN()       { return cssVar('--dec-warn', '#A8690C'); },
+    get REDACT()     { return cssVar('--dec-redact', '#1F5C8C'); },
+    get ESCALATE()   { return cssVar('--dec-escalate', '#C2410C'); },
+    get BLOCK()      { return cssVar('--dec-block', '#C8102E'); },
+    get FACTUALITY() { return cssVar('--text-main', '#1A140F'); },
+    get PRIVACY()    { return cssVar('--dec-redact', '#1F5C8C'); },
+    get BIAS()       { return cssVar('--dec-escalate', '#C2410C'); },
+    get COST()       { return cssVar('--text-muted', '#8A7D6D'); }
 };
 
-// Generate deterministic demo data for fallback
-function getDemoData() {
-    return {
-        stats: {
-            total_evaluations: 145230,
-            avg_latency_ms: 142,
-            false_positive_count: 580,
-            alert_to_incident_rate: 12.4,
-            decisions: { ALLOW: 120000, WARN: 15000, REDACT: 5000, ESCALATE: 3230, BLOCK: 2000 },
-            risk_distribution: { factuality: 8500, privacy: 4200, bias: 1200, cost: 600 }
-        },
-        traces: Array.from({length: 10}).map((_, i) => ({
-            trace_id: 'TRC-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-            timestamp: new Date(Date.now() - i * 60000).toISOString(),
-            use_case: ['customer_support', 'internal_copilot', 'finance_agent'][i % 3],
-            action: ['generate_text', 'draft_email', 'execute_payment'][i % 3],
-            decision: Object.keys(DECISIONS)[i % 5],
-            total_latency_ms: 120 + Math.floor(Math.random() * 100),
-            risk_assessment: { current_turn_risk: Math.random() }
-        }))
-    };
-}
+
 
 // --- State ---
 let state = {
@@ -61,26 +103,61 @@ document.addEventListener('DOMContentLoaded', () => {
     initCharts();
     setupEventListeners();
     fetchData(); // initial fetch
-    state.pollingInterval = setInterval(fetchData, 5000);
+    state.pollingInterval = setInterval(fetchData, POLL_INTERVAL_MS);
 });
 
 // --- API Communication ---
+
+// There is no demo data. This console used to fall back to a fabricated dataset --
+// 145,230 evaluations, 580 false positives, ten random trace ids -- and, because the
+// fetch failures were swallowed rather than raised, it displayed all of it beside a
+// green "Connected" light. Invented operational numbers on a governance dashboard are
+// worse than no numbers, and this is the one product where that should be obvious.
+//
+// When the API cannot be reached the console says so and shows nothing.
 async function fetchData() {
+    const [statsRes, tracesRes] = await Promise.all([
+        fetch(api('/api/stats')).catch(() => null),
+        fetch(api('/api/traces')).catch(() => null),
+    ]);
+
+    const online = Boolean(statsRes && statsRes.ok && tracesRes && tracesRes.ok);
+    setConnectionStatus(online);
+
+    if (!online) {
+        renderOffline();
+        return;
+    }
+
     try {
-        const statsRes = await fetch('/api/stats').catch(() => null);
-        const tracesRes = await fetch('/api/traces').catch(() => null);
-
-        let data = getDemoData(); // fallback
-
-        if (statsRes && statsRes.ok) data.stats = await statsRes.json();
-        if (tracesRes && tracesRes.ok) data.traces = await tracesRes.json();
-
-        updateDashboard(data);
-        setConnectionStatus(true);
-    } catch {
-        console.error("Failed to fetch data, using demo data", e);
-        updateDashboard(getDemoData());
+        updateDashboard({ stats: await statsRes.json(), traces: await tracesRes.json() });
+    } catch (error) {
+        console.error('Malformed response from the API', error);
         setConnectionStatus(false);
+        renderOffline();
+    }
+}
+
+/** Blanks every figure rather than leaving the last good one looking current. */
+function renderOffline() {
+    const evalsEl = document.getElementById('stat-evals');
+    evalsEl.dataset.value = '0';
+    evalsEl.textContent = '—';
+    for (const id of ['stat-latency', 'stat-fpr', 'stat-air']) {
+        document.getElementById(id).textContent = '—';
+    }
+
+    document.getElementById('feed-body').innerHTML =
+        '<tr><td colspan="7" class="empty-state">No connection to the API. ' +
+        'Nothing to show.</td></tr>';
+    document.getElementById('review-queue-container').innerHTML =
+        '<p class="empty-state">No connection to the API.</p>';
+
+    if (state.charts) {
+        for (const chart of Object.values(state.charts)) {
+            if (chart && typeof chart.destroy === 'function') chart.destroy();
+        }
+        state.charts = {};
     }
 }
 
@@ -94,7 +171,7 @@ function setConnectionStatus(connected) {
     } else {
         dot.classList.remove('active');
         dot.style.background = 'var(--dec-block)';
-        text.textContent = 'Offline (Demo Mode)';
+        text.textContent = 'Offline — no data';
     }
 }
 
@@ -277,7 +354,7 @@ function updateReviewQueue(traces) {
 
 window.handleReview = async (traceId, approved) => {
     try {
-        await fetch('/api/review', {
+        await fetch(api('/api/review'), {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ trace_id: traceId, approved, reviewer_id: 'admin', reason: 'Dashboard review' })
@@ -350,7 +427,7 @@ function setupEventListeners() {
         btn.textContent = 'Evaluating...';
         
         try {
-            const res = await fetch('/api/evaluate', {
+            const res = await fetch(api('/api/evaluate'), {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
@@ -360,7 +437,7 @@ function setupEventListeners() {
             console.log("Eval result", data);
         } catch {
             console.log("Mock eval submitted", payload);
-            setTimeout(() => fetchData(), 500); // refresh feed
+            setTimeout(() => fetchData(), REFRESH_DELAY_MS); // refresh feed
         }
         
         btn.textContent = 'Evaluate';
