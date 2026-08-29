@@ -58,6 +58,34 @@ def _split_claims(text: str) -> List[str]:
     return claims or ([text] if text.strip() else [])
 
 
+# Figures and names are the parts of a claim a paraphrase does not change. Bag-of-word
+# overlap cannot see them: "the window is 30 days" and "the window is 400 days" share
+# every word longer than three characters, so a contradicted number scored as supported.
+_NUMBER = re.compile(r'\d[\d,]*(?:\.\d+)?')
+_PROPER = re.compile(r'\b[A-Z][a-z]{2,}\b')
+
+
+def _numbers(text: str) -> set:
+    """Figures, normalised so 1,240 and $1,240.00 are the same figure."""
+    found = set()
+    for match in _NUMBER.finditer(text):
+        value = match.group().replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        found.add(value or "0")
+    return found
+
+
+def _proper_nouns(text: str) -> set:
+    """Capitalised words that are not just the first word of a sentence."""
+    names = set()
+    for sentence in _SENTENCE_SPLIT.split(text):
+        tokens = _PROPER.findall(sentence)
+        first = sentence.strip().split(" ")[0].strip(".,!?") if sentence.strip() else ""
+        names |= {t for t in tokens if t != first}
+    return names
+
+
 def _content_words(text: str) -> set:
     return {
         w for w in (m.group().lower() for m in _WORD.finditer(text))
@@ -95,11 +123,15 @@ class FactualityDetector(BaseDetector):
             detail=detail,
         )
 
-    async def _evidence_branch(self, output_text: str, claims, context_documents):
+    def _evidence_branch(self, output_text: str, claims, context_documents):
         """Ragas-style coverage: fraction of claims the context does not support."""
         context_words = set()
+        context_numbers = set()
+        context_names = set()
         for doc in context_documents:
             context_words |= _content_words(doc)
+            context_numbers |= _numbers(doc)
+            context_names |= _proper_nouns(doc)
 
         supported = unsupported = 0
         spans = []
@@ -108,18 +140,31 @@ class FactualityDetector(BaseDetector):
             if not words:
                 supported += 1
                 continue
+
+            # A figure or a name the context does not contain is a specific, checkable
+            # contradiction, so it outranks the overlap score rather than averaging
+            # into it.
+            novel_numbers = _numbers(claim) - context_numbers
+            novel_names = _proper_nouns(claim) - context_names
             # Whole-word overlap. Substring matching previously counted "account" as
             # supported by "accountant".
             overlap = len(words & context_words) / len(words)
-            if overlap >= config.evidence_overlap_threshold:
+
+            if novel_numbers or novel_names:
+                detail = "Claim states {} the context does not contain: {}.".format(
+                    "a figure" if novel_numbers else "a name",
+                    ", ".join(sorted(novel_numbers or novel_names)),
+                )
+                severity = 0.8
+            elif overlap < config.evidence_overlap_threshold:
+                detail = f"Claim unsupported by context (overlap {overlap:.2f})."
+                severity = min(1.0, 0.6 + (config.evidence_overlap_threshold - overlap))
+            else:
                 supported += 1
                 continue
+
             unsupported += 1
-            span = self._span(
-                output_text, claim,
-                severity=min(1.0, 0.6 + (config.evidence_overlap_threshold - overlap)),
-                detail=f"Claim unsupported by context (overlap {overlap:.2f}).",
-            )
+            span = self._span(output_text, claim, severity=severity, detail=detail)
             if span:
                 spans.append(span)
 
@@ -158,7 +203,7 @@ class FactualityDetector(BaseDetector):
             "agreement": round(agreement, 3),
         }
 
-    async def _heuristic_branch(self, output_text: str, claims):
+    def _heuristic_branch(self, output_text: str, claims):
         """Surface-shape fallback used when no judge model is available.
 
         Weighted and capped rather than binary: the previous version scored 1.00 for
