@@ -77,7 +77,7 @@ class PrivacyDetector(BaseDetector):
             return False
         return not _VERSION_CONTEXT.search(text[: match.start()])
 
-    async def detect(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
+    def scan(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
         start_time = time.time()
         text_to_check = output_text
 

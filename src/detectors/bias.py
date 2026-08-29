@@ -61,7 +61,7 @@ class BiasDetector(BaseDetector):
     def category(self) -> str:
         return RiskCategory.BIAS
 
-    async def detect(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
+    def scan(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
         start_time = time.time()
 
         flagged_spans = []

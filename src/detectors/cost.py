@@ -35,7 +35,7 @@ class CostDetector(BaseDetector):
         self.session_costs.pop(session_id, None)
         self.session_inputs.pop(session_id, None)
 
-    async def detect(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
+    def scan(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
         start_time = time.time()
 
         session_id = kwargs.get("session_id") or "default_session"

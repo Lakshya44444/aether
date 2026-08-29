@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import re
 import time
@@ -203,7 +204,7 @@ class FactualityDetector(BaseDetector):
         context_documents = kwargs.get("context_documents")
         depth = kwargs.get("depth", VerificationDepth.MEDIUM)
 
-        claims = _split_claims(output_text)
+        claims = await asyncio.to_thread(_split_claims, output_text)
         if not claims:
             return DetectionResult(
                 category=RiskCategory.FACTUALITY, score=0.0, flagged=False,
@@ -219,15 +220,21 @@ class FactualityDetector(BaseDetector):
             samples = max(1, config.judge_samples - 1)
 
         if context_documents:
-            score, spans, details = await self._evidence_branch(output_text, claims, context_documents)
+            score, spans, details = await asyncio.to_thread(
+                self._evidence_branch, output_text, claims, context_documents
+            )
         elif samples and judge.judge_configured():
             try:
                 score, spans, details = await self._consistency_branch(input_text, output_text, samples)
             except judge.JudgeUnavailable as exc:
-                score, spans, details = await self._heuristic_branch(output_text, claims)
+                score, spans, details = await asyncio.to_thread(
+                    self._heuristic_branch, output_text, claims
+                )
                 details["judge_error"] = str(exc)
         else:
-            score, spans, details = await self._heuristic_branch(output_text, claims)
+            score, spans, details = await asyncio.to_thread(
+                self._heuristic_branch, output_text, claims
+            )
 
         details["depth"] = depth.value if isinstance(depth, VerificationDepth) else str(depth)
 
