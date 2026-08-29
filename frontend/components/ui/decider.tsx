@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE, cn } from "@/lib/utils";
 
 const LADDER = ["ALLOW", "WARN", "REDACT", "ESCALATE", "BLOCK"] as const;
@@ -47,42 +47,50 @@ const RECORDED: Record<string, { decision: Decision; reason: string; scores: Rec
 };
 
 type Result = { decision: Decision; reason: string; scores: Record<string, number>; live: boolean };
+type Loaded = Result & { ctx: string };
 
 export function Decider() {
   const [ctx, setCtx] = useState<(typeof CONTEXTS)[number]["key"]>("customer_support");
-  const [res, setRes] = useState<Result | null>(null);
-  const [status, setStatus] = useState<"idle" | "running" | "live" | "offline">("idle");
+  const [res, setRes] = useState<Loaded | null>(null);
 
-  const run = useCallback(async (key: (typeof CONTEXTS)[number]["key"]) => {
-    const c = CONTEXTS.find((c) => c.key === key)!;
-    setStatus("running");
-    try {
-      const r = await fetch(`${API_BASE}/api/evaluate`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input_text: INPUT,
-          output_text: OUTPUT,
-          use_case: c.key,
-          action: c.action,
-          session_id: `landing-${c.key}-${Date.now()}`,
-        }),
-      });
-      if (!r.ok) throw new Error(String(r.status));
-      const j = await r.json();
-      const scores: Record<string, number> = {};
-      for (const d of j.trace.detection_results ?? []) scores[d.category] = d.score;
-      setRes({ decision: j.decision, reason: j.reason, scores, live: true });
-      setStatus("live");
-    } catch {
-      setRes({ ...RECORDED[key], live: false });
-      setStatus("offline");
-    }
-  }, []);
+  // The request lives in the effect rather than in a callback the effect calls, so
+  // nothing sets state on the synchronous path, and a context switched mid-flight
+  // discards the reply that is arriving for the previous one.
+  useEffect(() => {
+    let cancelled = false;
+    const c = CONTEXTS.find((x) => x.key === ctx)!;
 
-  useEffect(() => { void run(ctx); }, [ctx, run]);
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/evaluate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input_text: INPUT,
+            output_text: OUTPUT,
+            use_case: c.key,
+            action: c.action,
+            session_id: `landing-${c.key}-${Date.now()}`,
+          }),
+        });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        const scores: Record<string, number> = {};
+        for (const d of j.trace.detection_results ?? []) scores[d.category] = d.score;
+        if (cancelled) return;
+        setRes({ decision: j.decision, reason: j.reason, scores, live: true, ctx });
+      } catch {
+        if (cancelled) return;
+        setRes({ ...RECORDED[ctx], live: false, ctx });
+      }
+    })();
 
-  const active = res?.decision;
+    return () => { cancelled = true; };
+  }, [ctx]);
+
+  // The result is stale until it carries the context currently selected.
+  const settled = res?.ctx === ctx ? res : null;
+  const active = settled?.decision;
 
   return (
     <section
@@ -95,7 +103,7 @@ export function Decider() {
         </span>
         <span className="font-mono text-xs text-mute">POST /api/evaluate</span>
         <span className="ml-auto label text-mute">
-          {status === "running" ? "evaluating…" : status === "live" ? "live" : status === "offline" ? "API offline — recorded run" : "idle"}
+          {!settled ? "evaluating…" : settled.live ? "live" : "API offline — recorded run"}
         </span>
       </div>
 

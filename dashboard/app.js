@@ -77,7 +77,7 @@ async function fetchData() {
 
         updateDashboard(data);
         setConnectionStatus(true);
-    } catch (e) {
+    } catch {
         console.error("Failed to fetch data, using demo data", e);
         updateDashboard(getDemoData());
         setConnectionStatus(false);
@@ -282,7 +282,7 @@ window.handleReview = async (traceId, approved) => {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ trace_id: traceId, approved, reviewer_id: 'admin', reason: 'Dashboard review' })
         });
-    } catch(e) {
+    } catch {
         console.log("Review submitted (mock)", traceId, approved);
     }
     fetchData(); // Refresh
@@ -358,7 +358,7 @@ function setupEventListeners() {
             const data = await res.json();
             // Show result
             console.log("Eval result", data);
-        } catch(err) {
+        } catch {
             console.log("Mock eval submitted", payload);
             setTimeout(() => fetchData(), 500); // refresh feed
         }

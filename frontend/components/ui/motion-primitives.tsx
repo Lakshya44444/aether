@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, useInView, useScroll, useSpring, useTransform } from "motion/react";
+import { motion, useInView, useReducedMotion, useScroll, useSpring, useTransform } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -58,10 +58,10 @@ export function Counter({ to, className }: { to: number; className?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
   const [n, setN] = useState(0);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
-    if (!inView) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return setN(to);
+    if (!inView || reduced) return;
     let raf = 0;
     const start = performance.now();
     const tick = (now: number) => {
@@ -71,7 +71,7 @@ export function Counter({ to, className }: { to: number; className?: string }) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [inView, to]);
+  }, [inView, reduced, to]);
 
-  return <span ref={ref} className={className}>{n}</span>;
+  return <span ref={ref} className={className}>{reduced ? to : n}</span>;
 }
