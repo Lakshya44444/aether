@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from src.config import config
 
 
 def _utcnow() -> datetime:
@@ -39,6 +41,7 @@ class RiskCategory(str, Enum):
     PRIVACY = "privacy"
     BIAS = "bias"
     COST = "cost"
+    INJECTION = "injection"
 
 
 class RiskTier(str, Enum):
@@ -213,16 +216,37 @@ class DecisionTrace(BaseModel):
 # ║  API Request / Response Models                                   ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
+def _fresh_session_id(value: Optional[str]) -> str:
+    """An explicit null or empty session id gets its own id, not a shared bucket.
+
+    `null` used to reach the session tracker and raise; `""` fell through to a
+    process-wide `default_session`, pooling one caller's cost and risk history into
+    every other caller's.
+    """
+    return value or str(uuid.uuid4())
+
+
 class EvaluationRequest(BaseModel):
     """Request to evaluate an AI interaction through the full pipeline."""
-    input_text: str
-    output_text: str
+    input_text: str = Field(max_length=config.max_text_chars)
+    output_text: str = Field(max_length=config.max_text_chars)
     use_case: UseCase = UseCase.CUSTOMER_SUPPORT
     action: ActionType = ActionType.GENERATE_TEXT
-    session_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
-    context_documents: Optional[List[str]] = None
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    context_documents: Optional[List[str]] = Field(
+        default=None, max_length=config.max_context_documents
+    )
     model_name: str = "default"
     metadata: Dict[str, Any] = {}
+
+    _session = field_validator("session_id", mode="before")(_fresh_session_id)
+
+    @field_validator("context_documents")
+    @classmethod
+    def _cap_documents(cls, docs: Optional[List[str]]) -> Optional[List[str]]:
+        if docs and any(len(d) > config.max_text_chars for d in docs):
+            raise ValueError(f"each context document must be <= {config.max_text_chars} characters")
+        return docs
 
 
 class EvaluationResponse(BaseModel):
@@ -236,10 +260,12 @@ class EvaluationResponse(BaseModel):
 
 class InputGuardrailRequest(BaseModel):
     """Request to screen input BEFORE it reaches the AI model."""
-    input_text: str
+    input_text: str = Field(max_length=config.max_text_chars)
     use_case: UseCase = UseCase.CUSTOMER_SUPPORT
-    session_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     metadata: Dict[str, Any] = {}
+
+    _session = field_validator("session_id", mode="before")(_fresh_session_id)
 
 
 class InputGuardrailResponse(BaseModel):

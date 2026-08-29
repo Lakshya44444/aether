@@ -34,6 +34,7 @@ class SentinelConfig(BaseSettings):
     evidence_overlap_threshold: float = 0.45
     privacy_threshold: float = 0.25
     bias_threshold: float = 0.4
+    injection_threshold: float = 0.5
     cost_warn_usd: float = 0.50
     cost_block_usd: float = 2.00
     cost_retry_escalate_count: int = 3
@@ -45,6 +46,12 @@ class SentinelConfig(BaseSettings):
 
     # ── Audit / Storage ──────────────────────────────────────────
     audit_db_path: str = "sentinel_audit.db"
+
+    # ── Request limits (trust boundary) ──────────────────────────
+    # Detection is regex-bound and linear in input length, so an uncapped body is a
+    # denial-of-service vector: one 4 MB request occupied the gateway for seconds.
+    max_text_chars: int = 100_000
+    max_context_documents: int = 50
 
     # ── Server ───────────────────────────────────────────────────
     host: str = "0.0.0.0"
