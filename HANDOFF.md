@@ -3,7 +3,11 @@
 Session handoff covering a full audit of `Sentinel_Final_Detailed_Report (6).docx` against the
 Round 2 problem statement, an evidence-based audit of the code, and 17 fix commits.
 
-Everything described here is **local only. Nothing has been pushed.**
+**Push state:** the history rewrite and all 17 fix commits **have been force-pushed** to
+`origin/main` (now at `47cb65c`). Only `HANDOFF.md` itself is unpushed. The original commit
+`1ed15ce` is **no longer reachable on the remote** — anyone who cloned before the rewrite must
+`git fetch && git reset --hard origin/main`. The local tag `backup-before-rewrite` is the only
+remaining reference to it.
 
 ---
 
@@ -36,23 +40,30 @@ of well- and loosely-governed data sources.
 
 ## 2. Git state
 
-`main` is **ahead 22, behind 1** of `origin/main`. Publishing requires
-`git push --force-with-lease` — **the user explicitly chose local-only; do not push without asking.**
+`origin/main` is at `47cb65c` — the rewritten history plus all 17 fix commits. `main` is **ahead 1**
+(the `HANDOFF.md` commit, `dcdc847`).
+
+The user originally chose local-only; the force-push was performed separately by the user after the
+fixes landed, not by the assistant. **Still ask before any further force-push.**
 
 ### History rewrite (done first, at user request)
 
 The repo was a single commit `1ed15ce "Initial project setup"` authored by
 `Lakshya <lakshya@example.com>`. Split into 5 atomic commits.
 
-User's decisions, both explicitly chosen — **honour these**:
-- **Local rewrite only, no push.**
+User's decisions at the time, both explicitly chosen:
+- **Local rewrite only, no push** — later superseded by the user's own force-push (see above).
+  Treat the *default* as still standing: **do not force-push without asking.**
 - **`Lakshya` preserved as author** on all 5 scaffold commits (original author + date). Committer is
-  Abhivansh. Fix commits are authored by Abhivansh.
+  Abhivansh. Fix commits are authored by Abhivansh. **Honour this in any further rewrite.**
 
 Verified byte-identical: tree hash `4a0114fa6d261bb3b2be50252a2df840ce0326d6` on both sides,
 40 files both sides, `git diff backup-before-rewrite HEAD` empty at the split point.
 
-**Safety net:** tag `backup-before-rewrite` → original `1ed15ce`. Do not delete until pushed.
+**Safety net:** tag `backup-before-rewrite` → original `1ed15ce`. Since the force-push, this tag is
+the **only** reference to the pre-rewrite commit — it is not on the remote. Do not delete it, and
+consider pushing the tag (`git push origin backup-before-rewrite`) so the original is recoverable
+by teammates.
 
 ### Commit style (matched from the user's `hermes` repo — solo-authored, best reference)
 
@@ -292,4 +303,5 @@ export SENTINEL_JUDGE_MODEL=gpt-4o-mini   # never the generating model
    input-side protection. §5.1's diagram shows it inline.
 8. CoVe and BiasFilter correction are still `asyncio.sleep` stubs — they now *pass through the
    re-verification gate*, so they can't lie, but they don't actually correct anything.
-9. `git push --force-with-lease` when the user decides to publish.
+9. Push `HANDOFF.md` (`dcdc847`) and consider pushing the `backup-before-rewrite` tag so the
+   pre-rewrite commit is recoverable by teammates — it currently exists only in this working copy.
