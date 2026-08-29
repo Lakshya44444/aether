@@ -1,4 +1,4 @@
-// Sentinel Dashboard App Logic
+// Aether Dashboard App Logic
 
 // --- Constants & Demo Data ---
 const DECISIONS = {

@@ -1,5 +1,5 @@
 """
-Sentinel — AI Runtime Control Plane
+Aether — AI Runtime Control Plane
 Core data models and schemas.
 
 Every data structure flowing through the 8-layer pipeline is defined here,
@@ -186,7 +186,7 @@ class CorrectionResult(BaseModel):
 # ╚══════════════════════════════════════════════════════════════════╝
 
 class DecisionTrace(BaseModel):
-    """Complete, append-only record of a single Sentinel decision.
+    """Complete, append-only record of a single Aether decision.
 
     Logged for EVERY decision regardless of outcome. Contains:
     detection signals, context, action impact/reversibility,
@@ -250,7 +250,7 @@ class EvaluationRequest(BaseModel):
 
 
 class EvaluationResponse(BaseModel):
-    """Response from the Sentinel evaluation pipeline."""
+    """Response from the Aether evaluation pipeline."""
     decision: Decision
     reason: str
     trace: DecisionTrace

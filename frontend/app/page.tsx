@@ -70,7 +70,7 @@ export default function Page() {
           </h1>
 
           <p className="mt-5 max-w-[56ch] text-lg text-ink-2">
-            Sentinel reads what your AI produced, weighs it against the action it is about to take,
+            Aether reads what your AI produced, weighs it against the action it is about to take,
             and returns one of five decisions — with a reason a human can read and an audit row that
             cannot be quietly edited.
           </p>
@@ -93,7 +93,7 @@ export default function Page() {
         <Eyebrow>Decision ladder</Eyebrow>
         <SectionTitle>Five states, ordered by how much they cost a human.</SectionTitle>
         <Lede>
-          A binary allow/block forces a choice between shipping noise and shipping risk. Sentinel resolves
+          A binary allow/block forces a choice between shipping noise and shipping risk. Aether resolves
           to the least disruptive state that still contains the problem, and every state above ALLOW
           carries the reason that produced it.
         </Lede>
@@ -303,7 +303,7 @@ function Brand() {
       <span className="relative size-5.5 shrink-0 bg-ink">
         <span className="spectrum absolute inset-x-1 top-[9.5px] h-[3px] -[1px]" />
       </span>
-      <span className="font-display text-lg tracking-[-0.01em]">Sentinel</span>
+      <span className="font-display text-lg tracking-[-0.01em]">Aether</span>
     </Link>
   );
 }

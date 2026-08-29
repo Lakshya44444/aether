@@ -19,9 +19,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinel — govern the action, not just the answer",
+  title: "Aether — govern the action, not just the answer",
   description:
-    "A runtime control plane for enterprise AI. Sentinel scores the model's output, weighs it against the action the AI is about to take, and returns one of five decisions with a tamper-evident audit trail.",
+    "A runtime control plane for enterprise AI. Aether scores the model's output, weighs it against the action the AI is about to take, and returns one of five decisions with a tamper-evident audit trail.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

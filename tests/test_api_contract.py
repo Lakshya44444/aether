@@ -11,16 +11,16 @@ Everything here goes through the real app.
 import pytest
 from fastapi.testclient import TestClient
 
-import src.main as sentinel
+import src.main as aether
 from src.models.schemas import Decision
 
 
 @pytest.fixture
 def client():
-    with TestClient(sentinel.app) as c:
-        sentinel.session_tracker.sessions.clear()
-        sentinel.cost_detector.session_costs.clear()
-        sentinel.cost_detector.session_inputs.clear()
+    with TestClient(aether.app) as c:
+        aether.session_tracker.sessions.clear()
+        aether.cost_detector.session_costs.clear()
+        aether.cost_detector.session_inputs.clear()
         yield c
 
 

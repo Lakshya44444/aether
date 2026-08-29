@@ -1,4 +1,4 @@
-"""Sentinel evaluation harness.
+"""Aether evaluation harness.
 
 Three questions, kept separate because they fail for different reasons:
 
@@ -25,8 +25,8 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 os.environ.setdefault(
-    "SENTINEL_AUDIT_DB_PATH",
-    os.path.join(tempfile.mkdtemp(prefix="sentinel-evals-"), "audit.db"),
+    "AETHER_AUDIT_DB_PATH",
+    os.path.join(tempfile.mkdtemp(prefix="aether-evals-"), "audit.db"),
 )
 
 from src.detectors.bias import BiasDetector          # noqa: E402
@@ -136,14 +136,14 @@ async def eval_detectors(split):
 
 async def eval_decisions(split):
     from httpx import ASGITransport, AsyncClient
-    import src.main as sentinel
+    import src.main as aether
 
     exact = floor_violations = total = 0
     latencies = []
     problems = []
 
-    async with sentinel.app.router.lifespan_context(sentinel.app):
-        async with AsyncClient(transport=ASGITransport(app=sentinel.app),
+    async with aether.app.router.lifespan_context(aether.app):
+        async with AsyncClient(transport=ASGITransport(app=aether.app),
                                base_url="http://evals") as client:
             for case in _load("decisions.jsonl"):
                 if case["split"] != split:
@@ -242,7 +242,7 @@ def main():
     gates = json.loads((HERE / "gates.json").read_text())
     splits = ("dev", "test") if args.split == "both" else (args.split,)
 
-    print("Sentinel evaluation")
+    print("Aether evaluation")
     print("=" * 78)
 
     detector_results = {}

@@ -243,8 +243,8 @@ class AuditLogger:
                 async for row in cursor:
                     stats.decisions[row[0]] = row[1]
 
-            # A reviewer approving something Sentinel stopped means Sentinel was wrong
-            # to stop it: a false positive. A reviewer rejecting something Sentinel let
+            # A reviewer approving something Aether stopped means Aether was wrong
+            # to stop it: a false positive. A reviewer rejecting something Aether let
             # through means it should have been caught: a false negative. Anything else
             # is a confirmed decision.
             #

@@ -11,7 +11,7 @@ import tempfile
 import pytest
 
 os.environ.setdefault(
-    "SENTINEL_AUDIT_DB_PATH", os.path.join(tempfile.mkdtemp(), "regression_audit.db")
+    "AETHER_AUDIT_DB_PATH", os.path.join(tempfile.mkdtemp(), "regression_audit.db")
 )
 
 import src.main as M

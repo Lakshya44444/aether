@@ -13,8 +13,8 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("SENTINEL_AUDIT_DB_PATH", "/tmp/sentinel_verify.db")
-DB = os.environ["SENTINEL_AUDIT_DB_PATH"]
+os.environ.setdefault("AETHER_AUDIT_DB_PATH", "/tmp/aether_verify.db")
+DB = os.environ["AETHER_AUDIT_DB_PATH"]
 
 from fastapi.testclient import TestClient  # noqa: E402
 from src.main import app  # noqa: E402
@@ -216,7 +216,7 @@ async def probe_accuracy():
 
 
 def main():
-    print("Sentinel adversarial verification")
+    print("Aether adversarial verification")
     print("=" * 62)
     with TestClient(app) as c:
         probe_context_documents(c)

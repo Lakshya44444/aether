@@ -1,9 +1,9 @@
 """
-Sentinel — AI Runtime Control Plane
+Aether — AI Runtime Control Plane
 Connected Demo Narrative
 
 Tells ONE connected story touching all three use cases and all five decision states.
-Run with: python -m demo.run_demo  (from e:\\sentinel)
+Run with: python -m demo.run_demo  (from e:\\aether)
 """
 import sys
 import os
@@ -56,7 +56,7 @@ async def evaluate_scenario(
     session_tracker, policy_engine, router, cove, bias_resampler,
     request: EvaluationRequest
 ):
-    """Run the full 8-layer Sentinel pipeline on a single request."""
+    """Run the full 8-layer Aether pipeline on a single request."""
     start = time.perf_counter()
 
     # 1. Request Context
@@ -255,7 +255,7 @@ async def run_demo():
         )
 
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as p:
-            p.add_task(description="Running Sentinel pipeline…", total=None)
+            p.add_task(description="Running Aether pipeline…", total=None)
             decision, reason, trace, corrected, elapsed, results, depth = await evaluate_scenario(
                 factuality, privacy, bias, cost_det,
                 session_tracker, policy_engine, router, cove, bias_resampler, req
@@ -316,7 +316,7 @@ async def run_demo():
     console.print(Panel(
         "[bold italic white]Nothing about the AI's underlying answer changed across these "
         "three moments. The governance decision changed because the context and the action "
-        "changed — that's the whole point of Sentinel.[/bold italic white]",
+        "changed — that's the whole point of Aether.[/bold italic white]",
         border_style="cyan",
         title="[bold cyan]THE CORE THESIS[/bold cyan]",
     ))

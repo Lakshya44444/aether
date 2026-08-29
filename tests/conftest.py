@@ -7,6 +7,6 @@ tamper-evidence tests fail on the second run against a chain the first run left 
 import os
 import tempfile
 
-os.environ["SENTINEL_AUDIT_DB_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="sentinel-tests-"), "audit.db"
+os.environ["AETHER_AUDIT_DB_PATH"] = os.path.join(
+    tempfile.mkdtemp(prefix="aether-tests-"), "audit.db"
 )

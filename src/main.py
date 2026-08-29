@@ -36,7 +36,7 @@ async def lifespan(_: FastAPI):
     await audit_logger.init_db()
     yield
 
-app = FastAPI(title="Sentinel AI Runtime Control Plane", lifespan=lifespan)
+app = FastAPI(title="Aether AI Runtime Control Plane", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

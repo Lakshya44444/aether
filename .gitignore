@@ -4,7 +4,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .DS_Store
-sentinel_audit.db
+aether_audit.db
 *.log
 
 # Frontend
@@ -19,6 +19,7 @@ CHANGES.md
 HANDOFF.md
 RESEARCH_REFERENCES.md
 RUNNING.md
+CODE_TOUR.md
 frontend/AGENTS.md
 frontend/CLAUDE.md
 frontend/README.md

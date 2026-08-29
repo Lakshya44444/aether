@@ -1,16 +1,16 @@
 """
-Sentinel — AI Runtime Control Plane
+Aether — AI Runtime Control Plane
 Application configuration.
 
-All settings can be overridden via environment variables prefixed with SENTINEL_.
-For example: SENTINEL_DEMO_MODE=false, SENTINEL_LLM_API_KEY=sk-...
+All settings can be overridden via environment variables prefixed with AETHER_.
+For example: AETHER_DEMO_MODE=false, AETHER_LLM_API_KEY=sk-...
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
 
 
-class SentinelConfig(BaseSettings):
-    """Central configuration for the Sentinel runtime."""
+class AetherConfig(BaseSettings):
+    """Central configuration for the Aether runtime."""
 
     # ── Mode ──────────────────────────────────────────────────────
     demo_mode: bool = True  # True = heuristic/simulated detectors; False = real LLM calls
@@ -45,7 +45,7 @@ class SentinelConfig(BaseSettings):
     trajectory_window_turns: int = 3
 
     # ── Audit / Storage ──────────────────────────────────────────
-    audit_db_path: str = "sentinel_audit.db"
+    audit_db_path: str = "aether_audit.db"
 
     # ── Request limits (trust boundary) ──────────────────────────
     # Detection is regex-bound and linear in input length, so an uncapped body is a
@@ -61,8 +61,8 @@ class SentinelConfig(BaseSettings):
     # ── Policy directory ─────────────────────────────────────────
     policies_dir: str = "src/policy_engine/policies"
 
-    model_config = {"env_prefix": "SENTINEL_"}
+    model_config = {"env_prefix": "AETHER_"}
 
 
 # Singleton — importable from anywhere
-config = SentinelConfig()
+config = AetherConfig()

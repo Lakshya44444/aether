@@ -6,7 +6,7 @@ from src.models.schemas import DetectionResult
 
 
 class BaseDetector(ABC):
-    """Abstract base for all Sentinel detectors.
+    """Abstract base for all Aether detectors.
 
     `detect` is async but the scans underneath it are regex-bound and never yield.
     Awaiting them directly on the event loop made `asyncio.wait_for` unable to

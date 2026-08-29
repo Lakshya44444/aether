@@ -1,1 +1,1 @@
-# Sentinel — AI Runtime Control Plane
+# Aether — AI Runtime Control Plane
