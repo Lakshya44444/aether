@@ -1,12 +1,17 @@
 import asyncio
+import hashlib
+import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 import os
 
 from src.models.schemas import (
+    RiskCategory,
     EvaluationRequest, EvaluationResponse, 
     InputGuardrailRequest, InputGuardrailResponse,
     HumanReviewRequest, HumanReviewResponse,
@@ -15,6 +20,9 @@ from src.models.schemas import (
 )
 from src.config import config
 
+from src.observability import configure_logging, log_event, metrics
+from src.ratelimit import RateLimiter
+from src.state import open_state_store
 from src.risk_fabric.session_tracker import SessionTracker
 from src.risk_fabric.action_impact import get_action_profile
 from src.policy_engine.engine import PolicyEngine
@@ -31,12 +39,109 @@ from src.detectors.cost import CostDetector
 from src.detectors.injection import InjectionDetector
 from src.input_guardrail.guardrail import InputGuardrail
 
+if config.log_json:
+    configure_logging(config.log_level)
+log = logging.getLogger("aether")
+
+_API_KEYS = {k.strip() for k in config.api_keys.split(",") if k.strip()}
+rate_limiter = RateLimiter(config.rate_limit_per_minute, config.rate_limit_burst)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Every warning here names a setting whose default is convenient locally and wrong
+    # in a deployment. They are warnings rather than refusals because a gateway that
+    # will not start is worse than one that says what it is missing.
+    if not _API_KEYS:
+        log.warning(
+            "unauthenticated",
+            extra={"setting": "AETHER_API_KEYS", "detail":
+                   "/api routes are open; /api/traces returns decision records for "
+                   "every session this gateway has seen"},
+        )
+    if config.cors_origins.strip() == "*":
+        log.warning(
+            "permissive_cors",
+            extra={"setting": "AETHER_CORS_ORIGINS", "detail":
+                   "any page on the internet can read /api responses from a "
+                   "visitor's browser"},
+        )
+    if not config.audit_dsn or not config.redis_url:
+        log.warning(
+            "single_worker_only",
+            extra={"audit": "sqlite" if not config.audit_dsn else "postgres",
+                   "state": "memory" if not config.redis_url else "redis",
+                   "detail": "run exactly one uvicorn worker: process-local state and "
+                             "a process-local chain lock both break silently with more"},
+        )
+
     await audit_logger.init_db()
+    log_event(log, "started", audit_backend=type(audit_logger.backend).__name__,
+              state_store=type(state_store).__name__,
+              authenticated=bool(_API_KEYS),
+              rate_limit_per_minute=config.rate_limit_per_minute)
     yield
+    await state_store.close()
+    await audit_logger.backend.close()
 
 app = FastAPI(title="Aether AI Runtime Control Plane", lifespan=lifespan)
+
+
+# Health and metrics answer before authentication, because a probe and a scraper are
+# infrastructure rather than callers, and neither exposes anything about traffic
+# content. Everything else under /api needs a key.
+_OPEN_API_PATHS = frozenset({"/api/health", "/api/metrics"})
+
+
+@app.middleware("http")
+async def gate_api(request: Request, call_next):
+    """Authentication, rate limiting and request metrics for every /api route.
+
+    One middleware rather than a dependency per route, so a route added later is
+    covered by default instead of by someone remembering. Compared with
+    `compare_digest` -- the check is cheap, but a key is a secret and a
+    timing-variable comparison of a secret is a habit not worth keeping.
+
+    Order matters: authenticate first so the limiter can key on the API key rather
+    than the IP, which means one tenant behind a NAT is not limited as one caller.
+    """
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    started = time.monotonic()
+    presented = request.headers.get("x-api-key", "")
+
+    if _API_KEYS and path not in _OPEN_API_PATHS:
+        if not any(secrets.compare_digest(presented, key) for key in _API_KEYS):
+            metrics.observe_request(path, 401)
+            log_event(log, "unauthorized", level=logging.WARNING, path=path,
+                      client=request.client.host if request.client else "?")
+            return JSONResponse({"detail": "Invalid or missing X-API-Key"}, status_code=401)
+
+    # A presented key identifies a caller; without one, the client address is the best
+    # available identity. Hashed so a key never reaches a log line or a metric label.
+    identity = (
+        f"key:{hashlib.sha256(presented.encode()).hexdigest()[:16]}" if presented
+        else f"ip:{request.client.host if request.client else 'unknown'}"
+    )
+    if path not in _OPEN_API_PATHS and not rate_limiter.allow(identity):
+        metrics.observe_request(path, 429)
+        log_event(log, "rate_limited", level=logging.WARNING, path=path, identity=identity)
+        return JSONResponse(
+            {"detail": "Rate limit exceeded"},
+            status_code=429,
+            headers={"Retry-After": str(rate_limiter.retry_after_s())},
+        )
+
+    response = await call_next(request)
+    metrics.observe_request(path, response.status_code)
+    if path not in _OPEN_API_PATHS:
+        log_event(log, "request", path=path, status=response.status_code,
+                  duration_ms=round((time.monotonic() - started) * 1000, 1),
+                  identity=identity)
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,7 +158,11 @@ _SEVERITY = {
     Decision.BLOCK: 4,
 }
 
-session_tracker = SessionTracker()
+# One store shared by the two components that keep per-session state, so a session
+# lives or expires in one place rather than two that can disagree.
+state_store = open_state_store(config.redis_url)
+
+session_tracker = SessionTracker(state_store)
 policy_engine = PolicyEngine(config.policies_dir)
 verification_router = VerificationRouter()
 audit_logger = AuditLogger()
@@ -63,7 +172,7 @@ bias_resampler = BiasResampler()
 factuality_detector = FactualityDetector()
 privacy_detector = PrivacyDetector()
 bias_detector = BiasDetector()
-cost_detector = CostDetector()
+cost_detector = CostDetector(state_store)
 injection_detector = InjectionDetector()
 input_guardrail = InputGuardrail()
 
@@ -116,13 +225,17 @@ async def evaluate(request: EvaluationRequest):
     by_name = dict(zip(detector_names, detection_results))
     valid_results = [res for res in detection_results if not isinstance(res, Exception)]
 
-    # Input-side spans carry offsets into the prompt, not the completion. Tagging them
-    # keeps them out of the output redaction path, where they would mask the wrong
-    # characters, while still letting the policy engine score them.
+    # Input-side spans carry offsets into the prompt, not the completion. The privacy
+    # detector is the same detector pointed at the prompt, so its result is re-labelled
+    # onto its own category: sharing `privacy` let a finding in the prompt select
+    # REDACT, which then found nothing in the completion to mask and returned a
+    # redaction that never happened. `side` stays for consumers that group by it.
     for name in ("input_privacy", "injection"):
         result = by_name[name]
         if not isinstance(result, Exception):
             result.details = {**result.details, "side": "input"}
+    if not isinstance(by_name["input_privacy"], Exception):
+        by_name["input_privacy"].category = RiskCategory.INPUT_PRIVACY
 
     failed_detectors = [
         f"{name} (timeout)" if isinstance(res, asyncio.TimeoutError) else name
@@ -131,7 +244,7 @@ async def evaluate(request: EvaluationRequest):
     ]
 
     impact, reversibility = get_action_profile(request.action)
-    turn_risk, session_exposure, trajectory = session_tracker.update(
+    turn_risk, session_exposure, trajectory = await session_tracker.update(
         request.session_id, request.use_case, valid_results
     )
     
@@ -250,10 +363,23 @@ async def evaluate(request: EvaluationRequest):
                 method="span_redaction",
                 details={"spans_masked": len(privacy_spans)},
             )
+        else:
+            # Nothing in the completion to mask. Only an output-side privacy finding can
+            # select REDACT now, so reaching this is a bug rather than a policy outcome
+            # -- and returning REDACT with no masked text would tell the caller their
+            # output was cleaned when it was handed back untouched. Escalate instead.
+            decision = Decision.ESCALATE
+            reason = (
+                f"{reason}; REDACT requested with no output span to mask, "
+                "escalated rather than returning unmasked text"
+            )
 
-    session_tracker.record_decision(request.session_id, decision)
+    await session_tracker.record_decision(request.session_id, decision)
 
     latency_ms = (time.time() - start_time) * 1000
+    metrics.observe_decision(request.use_case.value, decision.value, latency_ms)
+    if failed_detectors:
+        metrics.observe_detector_failures(failed_detectors)
 
     trace = DecisionTrace(
         request_id="req-" + str(time.time()),
@@ -274,7 +400,18 @@ async def evaluate(request: EvaluationRequest):
         total_latency_ms=latency_ms
     )
     await audit_logger.log_trace(trace)
-    
+
+    # The decision, not the text. A log line carrying the prompt would put the same PII
+    # in the log aggregator that the audit log goes to the trouble of masking.
+    log_event(
+        log, "decision",
+        trace_id=trace.trace_id, session_id=request.session_id,
+        use_case=request.use_case.value, action=request.action.value,
+        decision=decision.value, policy_id=policy_id, depth=depth.value,
+        latency_ms=round(latency_ms, 1), failed_detectors=failed_detectors or None,
+        scores={r.category.value: round(r.score, 3) for r in valid_results},
+    )
+
     return EvaluationResponse(
         decision=decision,
         reason=reason,
@@ -318,13 +455,70 @@ async def verify_audit_chain():
     return {"intact": ok, "rows_checked": checked, "first_invalid_trace_id": first_bad}
 
 
+@app.get("/api/health")
+async def health():
+    """Liveness and readiness in one probe.
+
+    Readiness has to touch the backends: a gateway that answers 200 while its audit
+    store is unreachable is worse than one that reports unhealthy, because every
+    decision it makes goes unrecorded. Open to unauthenticated callers -- a probe is
+    infrastructure, and nothing here describes traffic.
+    """
+    checks = {}
+    ok = True
+    try:
+        await audit_logger.backend.head()
+        checks["audit"] = "ok"
+    except Exception as exc:
+        checks["audit"] = f"error: {exc}"
+        ok = False
+    try:
+        await state_store.get("health:probe")
+        checks["state"] = "ok"
+    except Exception as exc:
+        checks["state"] = f"error: {exc}"
+        ok = False
+    checks["policies"] = f"{len(policy_engine.policies)} loaded"
+    if not policy_engine.policies:
+        ok = False
+
+    return JSONResponse({"status": "ok" if ok else "unhealthy", "checks": checks},
+                        status_code=200 if ok else 503)
+
+
+@app.get("/api/metrics")
+async def prometheus_metrics():
+    """Prometheus text exposition. Watch aether_detector_failures_total."""
+    return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
+
+
+@app.post("/api/policies/reload")
+async def reload_policies():
+    """Re-reads the policy directory without a restart.
+
+    Policies are data and a compliance change should not need a deployment. Behind the
+    same key as everything else: reloading is a change to how every subsequent request
+    is governed.
+    """
+    before = sorted(policy_engine.policies)
+    policy_engine.policies = {}
+    policy_engine.load_policies()
+    after = sorted(policy_engine.policies)
+    log_event(log, "policies_reloaded", loaded=after,
+              added=[u for u in after if u not in before],
+              removed=[u for u in before if u not in after])
+    return {"loaded": after,
+            "added": [u for u in after if u not in before],
+            "removed": [u for u in before if u not in after]}
+
+
 @app.get("/api/stats", response_model=DashboardStats)
 async def get_stats():
     return await audit_logger.get_stats()
 
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
-    return session_tracker.get_session_info(session_id)
+    return await session_tracker.get_session_info(session_id)
 
 # Serve the built Next.js frontend when it exists, falling back to the legacy static
 # dashboard so the gateway still has a UI before the frontend is built.
