@@ -1,0 +1,89 @@
+# The appliance: one gateway, one volume, no external dependencies.
+#
+#   docker compose up --build
+#
+# For the scaled shape -- Postgres, Redis and more than one worker -- use:
+#
+#   docker compose --profile scaled up --build
+#
+# The two profiles exist so the difference between them is a diff you can read rather
+# than a paragraph of prose: it is exactly AETHER_AUDIT_DSN, AETHER_REDIS_URL and the
+# worker count, because those are the three things that make the process stateless.
+
+services:
+  aether:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Generate a real one: openssl rand -hex 32. Without it the API is open and the
+      # gateway says so at startup.
+      AETHER_API_KEYS: ${AETHER_API_KEYS:?set AETHER_API_KEYS, e.g. in a .env file}
+      AETHER_CORS_ORIGINS: ${AETHER_CORS_ORIGINS:-http://localhost:8000}
+      AETHER_AUDIT_DB_PATH: /var/lib/aether/audit.db
+      AETHER_RATE_LIMIT_PER_MINUTE: ${AETHER_RATE_LIMIT_PER_MINUTE:-120}
+      AETHER_LOG_LEVEL: ${AETHER_LOG_LEVEL:-INFO}
+    volumes:
+      - audit:/var/lib/aether
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── The scaled shape ───────────────────────────────────────────────────────
+  aether-scaled:
+    profiles: ["scaled"]
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      AETHER_API_KEYS: ${AETHER_API_KEYS:?set AETHER_API_KEYS, e.g. in a .env file}
+      AETHER_CORS_ORIGINS: ${AETHER_CORS_ORIGINS:-http://localhost:8000}
+      AETHER_AUDIT_DSN: postgresql://aether:${POSTGRES_PASSWORD:-aether}@postgres:5432/aether
+      AETHER_REDIS_URL: redis://redis:6379/0
+      AETHER_RATE_LIMIT_PER_MINUTE: ${AETHER_RATE_LIMIT_PER_MINUTE:-120}
+    # Safe only because the chain is in Postgres, where appends take a row lock, and
+    # session state is in Redis, where every worker reads the same conversation.
+    command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["scaled"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aether}
+      POSTGRES_DB: aether
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aether"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    profiles: ["scaled"]
+    image: redis:7-alpine
+    # Session exposure is recoverable state -- losing it costs one conversation's
+    # history, not an audit record -- so no persistence is configured for it.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  audit:
+  pgdata:

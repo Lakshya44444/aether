@@ -1,0 +1,16 @@
+.git
+.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+frontend/.next
+frontend/out
+frontend/tsconfig.tsbuildinfo
+*.db
+*.log
+evals
+tests
+scripts
+demo
+architecture
+*.md
