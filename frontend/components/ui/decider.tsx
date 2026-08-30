@@ -165,13 +165,18 @@ export function Decider() {
           <div className="mt-5">
             <Label>Why</Label>
             <p className="min-h-[76px] border border-rule bg-paper px-4 py-3 text-[13.5px] leading-relaxed text-ink-2">
-              {res?.reason ?? "Running the first evaluation…"}
+              {/* `settled`, not `res`. Keying the ladder off the settled result and the
+                  reason off the raw one paired them wrongly on every context switch:
+                  the ladder went dark while this line still explained the previous
+                  context's decision, so the page showed a verdict and a rationale that
+                  did not belong together. */}
+              {settled ? settled.reason : res ? "Evaluating…" : "Running the first evaluation…"}
             </p>
           </div>
 
           <div className="mt-5 grid gap-2.5">
             {["factuality", "privacy", "bias", "cost"].map((c) => {
-              const v = res?.scores?.[c] ?? 0;
+              const v = settled?.scores?.[c] ?? 0;
               return (
                 <div key={c} className="grid grid-cols-[74px_1fr_40px] items-center gap-3">
                   <span className="label text-mute">{c}</span>
@@ -183,7 +188,7 @@ export function Decider() {
                       transition={{ duration: 0.6, ease: [0.22, 0.68, 0.28, 1] }}
                     />
                   </span>
-                  <span className="text-right font-mono text-xs text-ink-2">{res ? v.toFixed(2) : "—"}</span>
+                  <span className="text-right font-mono text-xs text-ink-2">{settled ? v.toFixed(2) : "—"}</span>
                 </div>
               );
             })}
