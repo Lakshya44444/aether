@@ -1,101 +1,65 @@
-import asyncio
 import hashlib
 import json
-import os
-import aiosqlite
 from typing import Optional, List
-from src.models.schemas import DecisionTrace, DashboardStats
+from src.audit.backends import ChainBackend, open_backend
+from src.correction.redact import apply_redaction, mask_label
+
+from src.models.schemas import DecisionTrace, DashboardStats, RiskCategory
 from src.config import config
+
+
+_PII_CATEGORIES = (RiskCategory.PRIVACY, RiskCategory.INPUT_PRIVACY)
+
+
+def _mask_span_text(result):
+    """Replaces the quoted characters of a PII span with the label that masked them.
+
+    Only the PII categories: a factuality or bias span quotes text that stays verbatim
+    in the completion anyway, so masking its copy would hide nothing that is not
+    already stored beside it.
+    """
+    if result.category not in _PII_CATEGORIES or not result.flagged_spans:
+        return result
+    return result.model_copy(update={
+        "flagged_spans": [s.model_copy(update={"text": mask_label(s)})
+                          for s in result.flagged_spans],
+    })
 
 _GENESIS = "0" * 64
 
 
 class AuditLogger:
-    """Decision Trace + SQLite audit log.
+    """Decision Trace + hash-chained audit log.
 
     Rows are hash-chained: each row stores the hash of the previous row together with
-    its own content. SQLite cannot prevent an UPDATE or DELETE, so tamper-evidence is
-    provided instead of a claim of immutability the storage layer cannot keep.
+    its own content. Neither SQLite nor Postgres can prevent an UPDATE or DELETE, so
+    tamper-evidence is provided instead of a claim of immutability the storage layer
+    cannot keep.
 
     Everything that can change the published metrics is inside the chain, including
     human review verdicts. A review is an appended row, not an update to the row it
     reviews, because a mutable column is outside the hash and can be forged silently.
+
+    Where the rows live is `src/audit/backends.py`'s problem. This class owns the chain
+    rule and nothing else, so SQLite and Postgres cannot drift apart on what a valid
+    chain is.
     """
 
-    def __init__(self):
-        self.db_path = config.audit_db_path
-        self._chain_lock = asyncio.Lock()
+    def __init__(self, backend: Optional[ChainBackend] = None):
+        self.backend = backend or open_backend(config.audit_dsn, config.audit_db_path)
+
+    @property
+    def db_path(self) -> str:
+        """Kept for the tests and scripts that open the SQLite file directly."""
+        return getattr(self.backend, "path", "")
 
     async def init_db(self):
-        """Create the parent directory and SQLite tables if they do not exist."""
-        db_dir = os.path.dirname(self.db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS decision_traces (
-                    trace_id TEXT PRIMARY KEY,
-                    timestamp TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    use_case TEXT NOT NULL,
-                    decision TEXT NOT NULL,
-                    trace_json TEXT NOT NULL,
-                    kind TEXT NOT NULL DEFAULT 'trace',
-                    prev_hash TEXT NOT NULL DEFAULT '',
-                    row_hash TEXT NOT NULL DEFAULT ''
-                );
-            ''')
-            # Databases written before review rows existed are missing `kind`.
-            try:
-                await db.execute(
-                    "ALTER TABLE decision_traces ADD COLUMN kind TEXT NOT NULL DEFAULT 'trace'"
-                )
-            except Exception:
-                pass
-            # The head anchors the chain's length and final hash. Without it, deleting
-            # the newest rows leaves a chain that still verifies from genesis, so an
-            # operator could drop every trace since the incident and pass an audit.
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS audit_head (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    row_hash TEXT NOT NULL,
-                    row_count INTEGER NOT NULL
-                );
-            ''')
-            await db.execute(
-                'CREATE INDEX IF NOT EXISTS idx_traces_ts ON decision_traces(timestamp DESC)'
-            )
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_traces_kind ON decision_traces(kind)')
-            await db.commit()
+        """Creates whatever the configured backend needs."""
+        await self.backend.init()
 
     @staticmethod
     def _hash_row(prev_hash: str, trace_json: str) -> str:
         return hashlib.sha256(f"{prev_hash}{trace_json}".encode("utf-8")).hexdigest()
-
-    async def _head(self, db) -> tuple:
-        async with db.execute('SELECT row_hash, row_count FROM audit_head WHERE id = 1') as cursor:
-            row = await cursor.fetchone()
-        return (row[0], row[1]) if row else (_GENESIS, 0)
-
-    async def _append(self, db, *, trace_id, timestamp, session_id, use_case,
-                      decision, payload_json, kind):
-        """Appends one chained row and moves the head pointer with it."""
-        prev_hash, count = await self._head(db)
-        row_hash = self._hash_row(prev_hash, payload_json)
-        await db.execute('''
-            INSERT INTO decision_traces (
-                trace_id, timestamp, session_id, use_case, decision,
-                trace_json, kind, prev_hash, row_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (trace_id, timestamp, session_id, use_case, decision,
-              payload_json, kind, prev_hash, row_hash))
-        await db.execute(
-            'INSERT INTO audit_head (id, row_hash, row_count) VALUES (1, ?, ?) '
-            'ON CONFLICT(id) DO UPDATE SET row_hash = excluded.row_hash, '
-            'row_count = excluded.row_count',
-            (row_hash, count + 1),
-        )
-        await db.commit()
 
     async def verify_chain(self):
         """Recomputes the chain and reports the first row that does not match.
@@ -106,13 +70,8 @@ class AuditLogger:
         # accidental corruption and unsophisticated tampering, not an attacker with
         # write access to the whole database. Anchoring the head externally -- a signed
         # checkpoint, or an append to write-once storage -- is the upgrade path.
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                'SELECT trace_id, trace_json, prev_hash, row_hash '
-                'FROM decision_traces ORDER BY rowid ASC'
-            ) as cursor:
-                rows = await cursor.fetchall()
-            head_hash, head_count = await self._head(db)
+        rows = await self.backend.fetch_all_rows()
+        head_hash, head_count = await self.backend.head()
 
         expected_prev = _GENESIS
         for trace_id, trace_json, prev_hash, row_hash in rows:
@@ -126,48 +85,89 @@ class AuditLogger:
             return False, len(rows), rows[-1][0] if rows else None
         return True, len(rows), None
 
+    @staticmethod
+    def _for_storage(trace: DecisionTrace) -> DecisionTrace:
+        """Masks detected PII in the text a row persists.
+
+        The audit log is the one place every prompt and completion the gateway has ever
+        seen accumulates, and /api/traces reads it back. Storing that text verbatim made
+        the governance record the largest PII store in the system. Offsets, categories
+        and severities are untouched, so a reviewer can still see what was found and
+        where; only the characters the detectors identified are masked.
+
+        That includes the span's own `text`. Masking the completion while leaving the
+        span quoting it verbatim stored the one substring guaranteed to be PII -- the
+        part detection actually caught -- in the clear, and served it from /api/traces.
+
+        Offsets index the text the span was found in: privacy spans index the
+        completion, input_privacy and injection spans index the prompt.
+        """
+        if not config.audit_redact_stored_text:
+            return trace
+
+        output_spans = []
+        input_spans = []
+        for result in trace.detection_results:
+            if result.category == RiskCategory.PRIVACY:
+                output_spans.extend(result.flagged_spans)
+            elif result.category == RiskCategory.INPUT_PRIVACY:
+                input_spans.extend(result.flagged_spans)
+
+        if not output_spans and not input_spans:
+            return trace
+
+        masked_results = [_mask_span_text(r) for r in trace.detection_results]
+        update = {
+            "input_text": apply_redaction(trace.input_text, input_spans),
+            "output_text": apply_redaction(trace.output_text, output_spans),
+            "detection_results": masked_results,
+            # The risk assessment carries its own copy of the same results. Masking one
+            # list and not the other left the PII in the row regardless.
+            "risk_assessment": trace.risk_assessment.model_copy(
+                update={"detection_results": masked_results}
+            ),
+        }
+        # A correction carries its own copy of the completion, which is the same text
+        # and the same offsets. Masking the trace but not this one would have left the
+        # raw value in the row anyway.
+        if trace.correction and trace.correction.original_text == trace.output_text:
+            update["correction"] = trace.correction.model_copy(
+                update={"original_text": update["output_text"]}
+            )
+        return trace.model_copy(update=update)
+
     async def log_trace(self, trace: DecisionTrace):
         """Appends a tamper-evident row linked to the one before it."""
-        trace_json = trace.model_dump_json()
-        # Serialised so two concurrent requests cannot read the same tail hash and
-        # write two rows claiming the same predecessor.
-        async with self._chain_lock:
-            async with aiosqlite.connect(self.db_path) as db:
-                await self._append(
-                    db,
-                    trace_id=trace.trace_id,
-                    timestamp=trace.timestamp.isoformat(),
-                    session_id=trace.session_id,
-                    use_case=trace.use_case.value,
-                    decision=trace.decision.value,
-                    payload_json=trace_json,
-                    kind='trace',
-                )
+        trace_json = self._for_storage(trace).model_dump_json()
+        # The backend takes whatever lock keeps two appenders from reading the same
+        # tail hash: a process-local lock for SQLite, a row lock for Postgres.
+        await self.backend.append(
+            trace_id=trace.trace_id,
+            timestamp=trace.timestamp.isoformat(),
+            session_id=trace.session_id,
+            use_case=trace.use_case.value,
+            decision=trace.decision.value,
+            payload_json=trace_json,
+            kind='trace',
+            hash_row=self._hash_row,
+        )
 
     async def get_trace(self, trace_id: str) -> Optional[DecisionTrace]:
         """Get specific trace."""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                "SELECT trace_json FROM decision_traces WHERE trace_id = ? AND kind = 'trace'",
-                (trace_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    return DecisionTrace.model_validate_json(row[0])
-        return None
+        rows = await self.backend.query(
+            "SELECT trace_json FROM decision_traces WHERE trace_id = ? AND kind = 'trace'",
+            (trace_id,),
+        )
+        return DecisionTrace.model_validate_json(rows[0][0]) if rows else None
 
     async def get_recent_traces(self, limit=50) -> List[DecisionTrace]:
         """Get recent traces."""
-        traces = []
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                "SELECT trace_json FROM decision_traces WHERE kind = 'trace' "
-                "ORDER BY timestamp DESC LIMIT ?",
-                (limit,),
-            ) as cursor:
-                async for row in cursor:
-                    traces.append(DecisionTrace.model_validate_json(row[0]))
-        return traces
+        rows = await self.backend.query(
+            "SELECT trace_json FROM decision_traces WHERE kind = 'trace' "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+        return [DecisionTrace.model_validate_json(row[0]) for row in rows]
 
     async def log_human_review(self, trace_id: str, approved: bool, reviewer_id: str, reason: str,
                                timestamp: str = ""):
@@ -188,117 +188,123 @@ class AuditLogger:
             "timestamp": stamp,
         }, sort_keys=True)
 
-        async with self._chain_lock:
-            async with aiosqlite.connect(self.db_path) as db:
-                async with db.execute(
-                    "SELECT session_id, use_case FROM decision_traces "
-                    "WHERE trace_id = ? AND kind = 'trace'",
-                    (trace_id,),
-                ) as cursor:
-                    parent = await cursor.fetchone()
-                session_id, use_case = parent if parent else ("", "")
+        parent = await self.backend.query(
+            "SELECT session_id, use_case FROM decision_traces "
+            "WHERE trace_id = ? AND kind = 'trace'",
+            (trace_id,),
+        )
+        session_id, use_case = parent[0] if parent else ("", "")
 
-                async with db.execute(
-                    "SELECT COUNT(*) FROM decision_traces WHERE kind = 'review' "
-                    "AND json_extract(trace_json, '$.trace_id') = ?",
-                    (trace_id,),
-                ) as cursor:
-                    seq = (await cursor.fetchone())[0]
+        counted = await self.backend.query(
+            "SELECT COUNT(*) FROM decision_traces WHERE kind = 'review' "
+            f"AND {self.backend.json_field('trace_json', 'trace_id')} = ?",
+            (trace_id,),
+        )
+        seq = counted[0][0]
 
-                await self._append(
-                    db,
-                    trace_id=f"review:{trace_id}:{seq}",
-                    timestamp=stamp,
-                    session_id=session_id,
-                    use_case=use_case,
-                    decision="REVIEW",
-                    payload_json=payload,
-                    kind='review',
-                )
+        await self.backend.append(
+            trace_id=f"review:{trace_id}:{seq}",
+            timestamp=stamp,
+            session_id=session_id,
+            use_case=use_case,
+            decision="REVIEW",
+            payload_json=payload,
+            kind='review',
+            hash_row=self._hash_row,
+        )
 
     async def get_review(self, trace_id: str) -> Optional[dict]:
         """Returns the latest chained review verdict for a trace, if any."""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                "SELECT trace_json FROM decision_traces WHERE kind = 'review' "
-                "AND json_extract(trace_json, '$.trace_id') = ? ORDER BY rowid DESC LIMIT 1",
-                (trace_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
-        return json.loads(row[0]) if row else None
+        rows = await self.backend.query(
+            "SELECT trace_json FROM decision_traces WHERE kind = 'review' "
+            f"AND {self.backend.json_field('trace_json', 'trace_id')} = ? "
+            f"ORDER BY {self.backend.order_by} DESC LIMIT 1",
+            (trace_id,),
+        )
+        return json.loads(rows[0][0]) if rows else None
 
     async def get_stats(self) -> DashboardStats:
         """Aggregates dashboard statistics from reviewed and unreviewed traces."""
         stats = DashboardStats()
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                'SELECT COUNT(*), AVG(json_extract(trace_json, "$.total_latency_ms")) '
-                "FROM decision_traces WHERE kind = 'trace'"
-            ) as cursor:
-                row = await cursor.fetchone()
-                if row and row[0]:
-                    stats.total_evaluations = row[0]
-                    stats.avg_latency_ms = row[1] or 0.0
+        backend = self.backend
 
-            async with db.execute(
-                "SELECT decision, COUNT(*) FROM decision_traces WHERE kind = 'trace' "
-                "GROUP BY decision"
-            ) as cursor:
-                async for row in cursor:
-                    stats.decisions[row[0]] = row[1]
+        totals = await backend.query(
+            f"SELECT COUNT(*), AVG({backend.json_number('trace_json', 'total_latency_ms')}) "
+            "FROM decision_traces WHERE kind = 'trace'"
+        )
+        if totals and totals[0][0]:
+            stats.total_evaluations = totals[0][0]
+            stats.avg_latency_ms = totals[0][1] or 0.0
 
-            # A reviewer approving something Aether stopped means Aether was wrong
-            # to stop it: a false positive. A reviewer rejecting something Aether let
-            # through means it should have been caught: a false negative. Anything else
-            # is a confirmed decision.
-            #
-            # The verdict is read out of the review row's hashed payload, not out of the
-            # mutable review columns, so forging an approval to move these numbers breaks
-            # the chain that /api/audit/verify checks.
-            stopped = ("BLOCK", "ESCALATE", "REDACT", "WARN")
-            confirmed_alerts = 0
-            reviewed_alerts = 0
-            async with db.execute('''
-                SELECT t.decision, json_extract(r.trace_json, '$.approved'), COUNT(*)
-                FROM decision_traces t
-                JOIN (
-                    SELECT trace_json,
-                           json_extract(trace_json, '$.trace_id') AS tid,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY json_extract(trace_json, '$.trace_id')
-                               ORDER BY rowid DESC
-                           ) AS rn
-                    FROM decision_traces WHERE kind = 'review'
-                ) r ON r.tid = t.trace_id AND r.rn = 1
-                WHERE t.kind = 'trace'
-                GROUP BY t.decision, json_extract(r.trace_json, '$.approved')
-            ''') as cursor:
-                async for decision, approved, count in cursor:
-                    was_alert = decision in stopped
-                    if was_alert:
-                        reviewed_alerts += count
-                    if approved:
-                        if was_alert:
-                            stats.false_positive_count += count
-                        # An allowed response the reviewer also approves is simply correct.
-                    else:
-                        if was_alert:
-                            confirmed_alerts += count
-                        else:
-                            stats.false_negative_count += count
+        for decision, count in await backend.query(
+            "SELECT decision, COUNT(*) FROM decision_traces WHERE kind = 'trace' "
+            "GROUP BY decision"
+        ):
+            stats.decisions[decision] = count
 
-            stats.recent_traces = await self.get_recent_traces(10)
+        # A reviewer approving something Aether stopped means Aether was wrong
+        # to stop it: a false positive. A reviewer rejecting something Aether let
+        # through means it should have been caught: a false negative. Anything else
+        # is a confirmed decision.
+        #
+        # The verdict is read out of the review row's hashed payload, not out of the
+        # mutable review columns, so forging an approval to move these numbers breaks
+        # the chain that /api/audit/verify checks.
+        stopped = ("BLOCK", "ESCALATE", "REDACT", "WARN")
+        confirmed_alerts = 0
+        reviewed_alerts = 0
+        approved_field = backend.json_field("r.trace_json", "approved")
+        tid_field = backend.json_field("trace_json", "trace_id")
+        rows = await backend.query(f'''
+            SELECT t.decision, {approved_field}, COUNT(*)
+            FROM decision_traces t
+            JOIN (
+                SELECT trace_json,
+                       {tid_field} AS tid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {tid_field}
+                           ORDER BY {backend.order_by} DESC
+                       ) AS rn
+                FROM decision_traces WHERE kind = 'review'
+            ) r ON r.tid = t.trace_id AND r.rn = 1
+            WHERE t.kind = 'trace'
+            GROUP BY t.decision, {approved_field}
+        ''')
+        for decision, approved, count in rows:
+            # SQLite's json_extract gives 1/0; Postgres's ->> gives the strings
+            # 'true'/'false', and 'false' is truthy in Python. Normalising here rather
+            # than trusting the driver is the difference between a false-positive count
+            # and its exact inverse.
+            was_approved = approved in (1, True, "true")
+            was_alert = decision in stopped
+            if was_alert:
+                reviewed_alerts += count
+            if was_approved:
+                if was_alert:
+                    stats.false_positive_count += count
+                # An allowed response the reviewer also approves is simply correct.
+            elif was_alert:
+                confirmed_alerts += count
+            else:
+                stats.false_negative_count += count
 
-            # Alert-to-incident conversion is the share of raised alerts a human
-            # confirms as genuine — not the share of traffic that raised an alert,
-            # which is the alert rate and a different number entirely.
-            if reviewed_alerts:
-                stats.alert_to_incident_rate = confirmed_alerts / reviewed_alerts
+        reviewed = await backend.query(
+            f"SELECT DISTINCT {tid_field} FROM decision_traces WHERE kind = 'review'"
+        )
+        stats.reviewed_trace_ids = [row[0] for row in reviewed if row[0]]
 
-            for trace in stats.recent_traces:
-                for result in trace.detection_results:
-                    if result.flagged:
-                        key = result.category.value
-                        stats.risk_distribution[key] = stats.risk_distribution.get(key, 0) + 1
+        stats.recent_traces = await self.get_recent_traces(10)
+
+        # Alert-to-incident conversion is the share of raised alerts a human
+        # confirms as genuine — not the share of traffic that raised an alert,
+        # which is the alert rate and a different number entirely.
+        if reviewed_alerts:
+            stats.alert_to_incident_rate = confirmed_alerts / reviewed_alerts
+
+        for trace in stats.recent_traces:
+            for result in trace.detection_results:
+                if result.flagged:
+                    key = result.category.value
+                    stats.risk_distribution[key] = stats.risk_distribution.get(key, 0) + 1
 
         return stats

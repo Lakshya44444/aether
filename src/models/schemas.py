@@ -1,11 +1,3 @@
-"""
-Aether — AI Runtime Control Plane
-Core data models and schemas.
-
-Every data structure flowing through the 8-layer pipeline is defined here,
-providing a single, shared contract for detectors, risk fabric, policy engine,
-correction layer, audit log, and the API surface.
-"""
 from __future__ import annotations
 
 from enum import Enum
@@ -21,11 +13,6 @@ from src.config import config
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  Enumerations                                                    ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
 class Decision(str, Enum):
     """Five-state policy decision output."""
     ALLOW = "ALLOW"
@@ -34,15 +21,15 @@ class Decision(str, Enum):
     ESCALATE = "ESCALATE"
     BLOCK = "BLOCK"
 
-
 class RiskCategory(str, Enum):
-    """Detection categories — each maps to a dedicated detector."""
+    """Detection categories — each maps to a dedicated detector.
+    """
     FACTUALITY = "factuality"
     PRIVACY = "privacy"
+    INPUT_PRIVACY = "input_privacy"
     BIAS = "bias"
     COST = "cost"
     INJECTION = "injection"
-
 
 class RiskTier(str, Enum):
     """EU AI Act-aligned four-tier risk classification (Regulation 2024/1689)."""
@@ -51,13 +38,11 @@ class RiskTier(str, Enum):
     HIGH = "high"
     UNACCEPTABLE = "unacceptable"
 
-
 class UseCase(str, Enum):
     """Supported enterprise use cases, each with independent policy."""
     CUSTOMER_SUPPORT = "customer_support"
     INTERNAL_COPILOT = "internal_copilot"
     FINANCE_AGENT = "finance_agent"
-
 
 class ActionType(str, Enum):
     """Actions the AI system can take — ordered by impact × reversibility."""
@@ -68,14 +53,12 @@ class ActionType(str, Enum):
     DELETE_RECORD = "delete_record"
     EXECUTE_PAYMENT = "execute_payment"
 
-
 class ActionImpact(str, Enum):
     """Impact level of an action."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
-
 
 class ActionReversibility(str, Enum):
     """How reversible an action is once taken."""
@@ -84,13 +67,11 @@ class ActionReversibility(str, Enum):
     LOW = "low"
     VERY_LOW = "very_low"
 
-
 class Trajectory(str, Enum):
     """Risk trajectory direction across session turns."""
     RISING = "rising"
     FALLING = "falling"
     STABLE = "stable"
-
 
 class VerificationDepth(str, Enum):
     """Adaptive verification depth — routes between cheap and expensive checks."""
@@ -98,16 +79,8 @@ class VerificationDepth(str, Enum):
     MEDIUM = "medium"        # <700ms — SelfCheckGPT multi-sample consistency
     DEEP = "deep"            # <1000ms — Ragas claim decomposition + evidence
 
-
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  Detection Models                                                ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
 class FlaggedSpan(BaseModel):
     """A span of text flagged by one or more detectors.
-
-    Multi-label by design: a single span can carry
-    multiple risk categories simultaneously.
     """
     start: int
     end: int
@@ -115,7 +88,6 @@ class FlaggedSpan(BaseModel):
     categories: List[RiskCategory]
     severity: float = Field(ge=0.0, le=1.0)
     detail: str = ""
-
 
 class DetectionResult(BaseModel):
     """Output from a single detector module.
@@ -194,7 +166,9 @@ class DecisionTrace(BaseModel):
     """
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = Field(default_factory=_utcnow)
-    request_id: str
+    # Was "req-" + str(time.time()), which collides whenever two requests land in the
+    # same clock tick -- exactly the case it needed to tell apart.
+    request_id: str = Field(default_factory=lambda: f"req-{uuid.uuid4()}")
     session_id: str
     use_case: UseCase
     risk_tier: RiskTier
@@ -306,6 +280,10 @@ class DashboardStats(BaseModel):
     false_positive_count: int = 0
     false_negative_count: int = 0
     alert_to_incident_rate: float = 0.0
+    # A review is an appended chained row, not a column on the trace it reviews, so a
+    # trace cannot say whether it has been ruled on. Without this the console rebuilt
+    # the queue from every ESCALATE on every poll and re-listed items already handled.
+    reviewed_trace_ids: List[str] = []
     recent_traces: List[DecisionTrace] = []
     risk_distribution: Dict[str, int] = Field(default_factory=lambda: {
         "factuality": 0, "privacy": 0, "bias": 0, "cost": 0

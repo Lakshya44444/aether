@@ -3,7 +3,7 @@ from typing import List
 from src.models.schemas import FlaggedSpan
 
 
-def _label(span: FlaggedSpan) -> str:
+def mask_label(span: FlaggedSpan) -> str:
     """Derives the mask label from a detector's span detail, e.g. 'EMAIL' -> '[EMAIL]'."""
     if "type" in span.detail:
         return f"[{span.detail.split()[-1]}]"
@@ -31,5 +31,5 @@ def apply_redaction(text: str, spans: List[FlaggedSpan]) -> str:
         merged.append(span)
 
     for span in reversed(merged):
-        text = text[: span.start] + _label(span) + text[span.end :]
+        text = text[: span.start] + mask_label(span) + text[span.end :]
     return text

@@ -69,6 +69,26 @@ class AetherConfig(BaseSettings):
     factuality_heuristic_ceiling: float = 0.55
     injection_ceiling: float = 0.70
 
+    # ── Factuality heuristic weights ─────────────────────────────
+    # What each surface feature contributes to a claim's suspicion score when no judge
+    # model is configured. These are hand-fitted tuning parameters, not structural
+    # constants -- they are the first thing anyone retunes when the false-alarm rate
+    # moves, which is why they live here rather than inside the detector.
+    fact_weight_attribution: float = 0.35
+    fact_weight_absolute: float = 0.20
+    fact_weight_specific: float = 0.15
+    fact_weight_date: float = 0.10
+    # Hedged claims are asserted less strongly, so their weight is scaled down.
+    fact_hedge_multiplier: float = 0.40
+    # A claim scoring at or above this is worth reporting as a span.
+    fact_span_threshold: float = 0.35
+
+    # ── Shared state ─────────────────────────────────────────────
+    # Redis URL for session exposure and cost accounting. Empty keeps both in a
+    # process-local dict -- fine for one worker, silently wrong for more than one,
+    # because turn 2 of a conversation can land on a process that never saw turn 1.
+    redis_url: str = ""
+
     # ── Session Tracking ─────────────────────────────────────────
     max_session_exposure: float = 1.0
     session_timeout_minutes: int = 30
@@ -78,6 +98,17 @@ class AetherConfig(BaseSettings):
     # Default to a writable temp directory so local runs do not fail on machines where
     # the repo root or current working directory is on a full or restricted volume.
     audit_db_path: str = os.path.join(tempfile.gettempdir(), "aether_audit.db")
+    # Postgres DSN. Empty means the local SQLite file above, which is correct for a
+    # single-worker appliance and unsafe for anything else: SQLite appends are ordered
+    # by a lock inside one process, so a second worker forks the chain. Postgres takes
+    # a row lock every worker respects. See README, "Deploying this".
+    audit_dsn: str = ""
+    # The audit log is a governance record, not a copy of the traffic. Persisting raw
+    # prompts and completions turned the log into the largest PII store in the system
+    # -- and /api/traces served it. Detected spans are masked before a row is written;
+    # the offsets, categories and severities stay, so a trace is still reviewable.
+    # Set false only where the log itself is inside the compliance boundary.
+    audit_redact_stored_text: bool = True
 
     # ── Request limits (trust boundary) ──────────────────────────
     # Detection is regex-bound and linear in input length, so an uncapped body is a
@@ -88,7 +119,29 @@ class AetherConfig(BaseSettings):
     # ── Server ───────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
-    cors_origins: str = "*"
+    # Comma-separated. "*" is a development convenience: with no credentials in play it
+    # still lets any page on the internet read /api/traces from a browser, so it is not
+    # the default.
+    cors_origins: str = "http://localhost:3000,http://localhost:8000"
+
+    # ── Authentication (trust boundary) ──────────────────────────
+    # Comma-separated keys accepted in the X-API-Key header on every /api route.
+    # Empty disables authentication and logs a warning at startup: convenient for local
+    # work, never correct for a deployment, because /api/traces returns decision
+    # records for every session the gateway has seen.
+    api_keys: str = ""
+
+    # ── Rate limiting (trust boundary) ───────────────────────────
+    # Per-key when a key is presented, per-client-IP otherwise. Detection is linear in
+    # input length and a body may be 100 KB, so an unlimited caller is a CPU exhaustion
+    # vector even with authentication in place. 0 disables it.
+    rate_limit_per_minute: int = 120
+    rate_limit_burst: int = 30
+
+    # ── Observability ────────────────────────────────────────────
+    log_level: str = "INFO"
+    # JSON lines on stdout. False restores human-readable logs for local work.
+    log_json: bool = True
 
     # ── Policy directory ─────────────────────────────────────────
     policies_dir: str = "src/policy_engine/policies"
