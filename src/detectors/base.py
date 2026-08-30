@@ -33,3 +33,25 @@ class BaseDetector(ABC):
         (the factuality judge) overrides `detect` and offloads its own CPU work.
         """
         raise NotImplementedError
+
+
+def near(text: str, left, right, window: int = 60, ordered: bool = True):
+    """Yield (start, end) where a `left` match and a `right` match sit within `window`.
+
+    A literal phrase pattern only catches the wording it was written for. Most of what
+    these detectors look for is really a verb next to an object -- a cancel verb near an
+    instruction noun, a group term near a generalising frame -- with arbitrary words in
+    between. Matching the two halves separately and checking the distance covers the
+    paraphrases a single regex misses, without enumerating them.
+
+    `ordered=False` also accepts the object before the verb ("more energy than a
+    candidate at that stage of life").
+    """
+    lefts = [(m.start(), m.end()) for m in left.finditer(text)]
+    rights = [(m.start(), m.end()) for m in right.finditer(text)]
+    for ls, le in lefts:
+        for rs, re_ in rights:
+            if 0 <= rs - le <= window:
+                yield ls, re_
+            elif not ordered and 0 <= ls - re_ <= window:
+                yield rs, le

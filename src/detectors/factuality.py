@@ -217,18 +217,18 @@ class FactualityDetector(BaseDetector):
         for claim in claims:
             weight = 0.0
             if _ATTRIBUTION.search(claim):
-                weight += 0.35
+                weight += config.fact_weight_attribution
             if _ABSOLUTE.search(claim):
-                weight += 0.20
+                weight += config.fact_weight_absolute
             if _SPECIFIC.search(claim):
-                weight += 0.15
+                weight += config.fact_weight_specific
             if _DATE.search(claim):
-                weight += 0.10
+                weight += config.fact_weight_date
             if _HEDGE.search(claim):
-                weight *= 0.4
+                weight *= config.fact_hedge_multiplier
             weight = min(weight, 1.0)
             suspect += weight
-            if weight >= 0.35:
+            if weight >= config.fact_span_threshold:
                 span = self._span(
                     output_text, claim, severity=min(weight, _HEURISTIC_CEILING),
                     detail="Unhedged attributed or absolute claim, unverified.",

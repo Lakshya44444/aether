@@ -19,6 +19,8 @@ _SEVERITY = {
     "NATIONAL_ID": 1.0,
     "MEDICAL_RECORD": 1.0,
     "PASSPORT": 1.0,
+    "DRIVERS_LICENSE": 1.0,
+    "DATE_OF_BIRTH": 0.5,
     "ADDRESS": 0.5,
     "EMAIL": 0.4,
     "PHONE": 0.4,
@@ -27,7 +29,13 @@ _SEVERITY = {
 
 _PATTERNS = {
     "EMAIL": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
-    "PHONE": r'\b(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+    # Two shapes, because a phone number is only ever national. The first is NANP;
+    # the second is anything that announces itself as a phone number structurally -- a
+    # + country code, or a leading 0 trunk digit -- which is what every non-US
+    # numbering plan looks like and what the NANP-only pattern used to miss.
+    "PHONE": r'\b(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b|'
+             r'(?:\+\d{1,3}[-.\s]?\(?\d{1,4}\)?|\b\(?0\d{2,4}\)?)'
+             r'[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b',
     "SSN": r'\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b',
     # Vendors segment their keys (sk-proj-..., sk-ant-...), so the old
     # `sk-[a-zA-Z0-9]{20,}` stopped at the first hyphen and matched nothing.
@@ -36,6 +44,13 @@ _PATTERNS = {
     # digits would flag every order number in the corpus.
     "MEDICAL_RECORD": r'\b(?i:MRN|medical\s+record\s+(?:number|no\.?))\s*:?\s*#?\s*\d{5,12}\b',
     "PASSPORT": r'\b(?i:passport\s+(?:number|no\.?))\s*:?\s*[A-Z0-9]{6,9}\b',
+    # A licence number has no shape shared across issuers and a date of birth is
+    # indistinguishable from any other date, so both are matched by their label. Bare
+    # digits or a bare date would flag every order number and release date instead.
+    "DRIVERS_LICENSE": r'\b(?i:driver\'?s?\s+licen[cs]e|driving\s+licen[cs]e|DL)'
+                       r'(?:\s*(?:number|no\.?|#|is|:)){0,3}\s*[A-Z0-9]{5,20}\b',
+    "DATE_OF_BIRTH": r'\b(?i:date\s+of\s+birth|DOB|born\s+on)\s*:?\s*'
+                     r'[A-Za-z0-9][A-Za-z0-9/.,\- ]{5,20}?(?=[.;)]|$)',
     "BANK_ACCOUNT": r'\b(?i:sort\s+code)\s*:?\s*\d{2}[-\s]?\d{2}[-\s]?\d{2}\b|'
                     r'\b(?i:account\s+number)\s*:?\s*\d{6,12}\b',
     # ISO 13616: two letters, two check digits, then up to 30 alphanumerics in groups.
@@ -55,6 +70,10 @@ _ADDRESS_PATTERN = (
     r'\b\d{1,6}\s+(?:[A-Z][A-Za-z]*\s+){1,4}'
     r'(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b\.?'
 )
+
+# A phone-shaped run that continues into a suffix is a reference, not a number:
+# ticket 415-555-0132-A is the documented false alarm this rules out.
+_PHONE_SUFFIX = re.compile(r'[-/][A-Za-z0-9]')
 
 # A dotted quad written right after a version word is a release number, not a host.
 _VERSION_CONTEXT = re.compile(r'(?:\bv|\bversion|\brelease|\bbuild)\s*$', re.IGNORECASE)
@@ -142,6 +161,8 @@ class PrivacyDetector(BaseDetector):
                 if pii_type == "IP_ADDRESS" and not self._is_reportable_ip(text_to_check, match):
                     continue
                 if pii_type == "IBAN" and not self._is_iban(match.group()):
+                    continue
+                if pii_type == "PHONE" and _PHONE_SUFFIX.match(text_to_check[match.end():]):
                     continue
                 add(pii_type, match)
 

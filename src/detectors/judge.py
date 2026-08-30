@@ -5,7 +5,7 @@ separate, cheaper model from the one that produced the answer under review, so t
 detector never asks a model to grade its own output.
 """
 import asyncio
-from typing import List, Optional
+from typing import List
 
 import httpx
 
@@ -53,23 +53,3 @@ async def sample_answers(question: str, n: int, timeout: float) -> List[str]:
     if not answers:
         raise JudgeUnavailable("all judge samples failed")
     return answers
-
-
-async def entails(claim: str, reference: str, timeout: float) -> Optional[bool]:
-    """Asks the judge whether `reference` supports `claim`.
-
-    Returns True/False, or None when the judge gives an answer that is neither.
-    """
-    if not judge_configured():
-        raise JudgeUnavailable("no judge model configured")
-    prompt = (
-        "Does the reference text support the claim? "
-        "Reply with exactly one word: SUPPORTED, CONTRADICTED, or UNSUPPORTED.\n\n"
-        f"Reference: {reference}\n\nClaim: {claim}\n\nAnswer:"
-    )
-    verdict = (await _complete(prompt, temperature=0.0, timeout=timeout)).upper()
-    if "CONTRADICT" in verdict:
-        return False
-    if "SUPPORT" in verdict:
-        return True
-    return None

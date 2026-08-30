@@ -1,13 +1,15 @@
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Tuple
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from src.models.schemas import UseCase, DetectionResult, Decision, Trajectory, SessionInfo
+from src.state import StateStore, MemoryStore
 from src.config import config
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
 
 class SessionState(BaseModel):
     session_id: str
@@ -20,88 +22,109 @@ class SessionState(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     last_seen: datetime = Field(default_factory=_utcnow)
 
+
 class SessionTracker:
-    def __init__(self):
-        self.sessions: Dict[str, SessionState] = {}
+    """Risk carried across the turns of one conversation.
+
+    State lives in a `StateStore` rather than a dict on this object. As a dict it made
+    the gateway single-process by construction -- a second worker got its own copy, so
+    turn 2 could land somewhere that never saw turn 1 and `max_session_exposure`,
+    trajectory and retry counting silently stopped firing. With Redis behind the store
+    every worker reads the same session.
+
+    The store's TTL also replaces the `_evict_stale` sweep this class used to run on
+    every update: an expiring key is what "drop idle sessions" means, and it does not
+    need a scan.
+    """
+
+    def __init__(self, store: Optional[StateStore] = None):
+        # `store or MemoryStore()` looked equivalent and was not: MemoryStore
+        # defines __len__, so an empty one is falsy and the shared store passed in
+        # here was silently swapped for a private one. Every component then had its
+        # own view of every session.
+        self.store = MemoryStore() if store is None else store
         self.trajectory_window = max(2, config.trajectory_window_turns)
 
-    def _evict_stale(self) -> None:
-        """Drops sessions idle past the configured timeout.
+    @property
+    def _ttl(self) -> int:
+        return config.session_timeout_minutes * 60
 
-        Both this map and the cost detector's were unbounded process-local dicts, so a
-        long-running gateway retained every session it had ever seen.
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=config.session_timeout_minutes)
-        for sid in [s for s, st in self.sessions.items() if st.last_seen < cutoff]:
-            del self.sessions[sid]
+    @staticmethod
+    def _key(session_id: str) -> str:
+        return f"session:{session_id}"
 
-    def update(self, session_id: str, use_case: UseCase, detection_results: List[DetectionResult]) -> Tuple[float, float, Trajectory]:
+    async def update(
+        self, session_id: str, use_case: UseCase, detection_results: List[DetectionResult]
+    ) -> Tuple[float, float, Trajectory]:
         """Updates session state and returns (current_turn_risk, session_exposure, trajectory).
 
         Session exposure is intentionally treated as a governance heuristic rather than a calibrated probability.
         It is damped so a single risky turn does not immediately dominate a low-risk workflow, while repeated
         risky turns gradually push a session into a stricter control regime.
         """
-        self._evict_stale()
-
-        if session_id not in self.sessions:
-            self.sessions[session_id] = SessionState(session_id=session_id, use_case=use_case)
-
-        session = self.sessions[session_id]
-        session.last_seen = datetime.now(timezone.utc)
-
         # current_turn_risk: max of all detection scores for this turn
         current_turn_risk = 0.0
         if detection_results:
             current_turn_risk = max([dr.score for dr in detection_results] + [0.0])
 
-        session.risk_history.append(current_turn_risk)
-        del session.risk_history[: -2 * self.trajectory_window]
-        session.turn_count += 1
-
-        # Damped governance heuristic: a single high-risk turn should raise exposure, but not instantly exhaust
-        # a low-stakes use case. This preserves the report's design intent without turning the very first turn
-        # into an immediate block in the demo.
-        prior_exposure = session.current_exposure
-        damped_turn = current_turn_risk * config.exposure_turn_weight
-        session.current_exposure = min(
-            1.0, (prior_exposure * config.exposure_decay) + damped_turn
-        )
-
-        # compute trajectory using a sliding window
-        trajectory = Trajectory.STABLE
-
         window = self.trajectory_window
-        if len(session.risk_history) >= 2 * window:
-            recent = session.risk_history[-window:]
-            prev = session.risk_history[-2 * window:-window]
-            avg_recent = sum(recent) / window
-            avg_prev = sum(prev) / window
 
-            if avg_recent > avg_prev + config.trajectory_delta:
-                trajectory = Trajectory.RISING
-            elif avg_recent < avg_prev - config.trajectory_delta:
-                trajectory = Trajectory.FALLING
+        def mutate(raw: Optional[dict]) -> dict:
+            session = (
+                SessionState.model_validate(raw) if raw
+                else SessionState(session_id=session_id, use_case=use_case)
+            )
+            session.last_seen = _utcnow()
+            session.risk_history.append(current_turn_risk)
+            del session.risk_history[: -2 * window]
+            session.turn_count += 1
 
-        session.trajectory = trajectory
+            # Damped governance heuristic: a single high-risk turn should raise exposure, but not instantly
+            # exhaust a low-stakes use case. This preserves the report's design intent without turning the
+            # very first turn into an immediate block in the demo.
+            session.current_exposure = min(
+                1.0,
+                (session.current_exposure * config.exposure_decay)
+                + (current_turn_risk * config.exposure_turn_weight),
+            )
 
-        return current_turn_risk, session.current_exposure, trajectory
+            # Trajectory over a sliding window.
+            trajectory = Trajectory.STABLE
+            if len(session.risk_history) >= 2 * window:
+                recent = session.risk_history[-window:]
+                prev = session.risk_history[-2 * window:-window]
+                avg_recent = sum(recent) / window
+                avg_prev = sum(prev) / window
+                if avg_recent > avg_prev + config.trajectory_delta:
+                    trajectory = Trajectory.RISING
+                elif avg_recent < avg_prev - config.trajectory_delta:
+                    trajectory = Trajectory.FALLING
+            session.trajectory = trajectory
+            return session.model_dump(mode="json")
 
-    def record_decision(self, session_id: str, decision: Decision) -> None:
+        updated = await self.store.read_modify_write(self._key(session_id), self._ttl, mutate)
+        session = SessionState.model_validate(updated)
+        return current_turn_risk, session.current_exposure, session.trajectory
+
+    async def record_decision(self, session_id: str, decision: Decision) -> None:
         """Stores the outcome so the dashboard can show what a session actually got.
 
         `SessionInfo.last_decision` was declared and never populated.
         """
-        if session_id in self.sessions:
-            self.sessions[session_id].last_decision = decision
+        raw = await self.store.get(self._key(session_id))
+        if raw is None:
+            return
+        raw["last_decision"] = decision.value
+        await self.store.put(self._key(session_id), raw, self._ttl)
 
-    def get_session_info(self, session_id: str) -> SessionInfo:
+    async def get_session_info(self, session_id: str) -> SessionInfo:
         """Returns session info for the dashboard."""
-        if session_id not in self.sessions:
-            # Return empty dummy if not found
+        raw = await self.store.get(self._key(session_id))
+        if raw is None:
+            # An unknown or expired session, reported as empty rather than as an error.
             return SessionInfo(session_id=session_id, use_case=UseCase.CUSTOMER_SUPPORT)
-        
-        s = self.sessions[session_id]
+
+        s = SessionState.model_validate(raw)
         return SessionInfo(
             session_id=s.session_id,
             use_case=s.use_case,
@@ -109,5 +132,8 @@ class SessionTracker:
             current_exposure=s.current_exposure,
             trajectory=s.trajectory,
             last_decision=s.last_decision,
-            created_at=s.created_at
+            created_at=s.created_at,
         )
+
+    async def forget(self, session_id: str) -> None:
+        await self.store.delete(self._key(session_id))

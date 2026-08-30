@@ -1,4 +1,3 @@
-import asyncio
 from typing import List, Optional
 from src.models.schemas import CorrectionResult, FlaggedSpan
 
@@ -18,8 +17,6 @@ class CoVeReviser:
         corrected_text = output_text
         for span in flagged_spans:
             corrected_text = corrected_text.replace(span.text, f"[{span.text} - could not be verified]")
-
-        await asyncio.sleep(0.1)
 
         return CorrectionResult(
             attempted=True,

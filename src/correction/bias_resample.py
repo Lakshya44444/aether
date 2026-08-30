@@ -1,4 +1,3 @@
-import asyncio
 from typing import List
 from src.models.schemas import CorrectionResult, FlaggedSpan
 
@@ -17,8 +16,6 @@ class BiasResampler:
         corrected_text = output_text
         for span in flagged_spans:
             corrected_text = corrected_text.replace(span.text, "[Neutralized alternative]")
-
-        await asyncio.sleep(0.05)
 
         return CorrectionResult(
             attempted=True,

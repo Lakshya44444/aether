@@ -3,7 +3,7 @@ import time
 from typing import Any
 
 from src.models.schemas import DetectionResult, FlaggedSpan, RiskCategory
-from src.detectors.base import BaseDetector
+from src.detectors.base import BaseDetector, near
 from src.config import config
 
 # Matches a straight or curly apostrophe. Hardcoding U+2019 made the rule unmatchable
@@ -33,27 +33,16 @@ _PATTERNS = {
         rf'\bact\s+like\s+a\s+man\b',
         rf'\bwomen{_APOS}?s?\s+work\b',
     ],
-    # Bias that never names the protected trait. These carry the same hiring
-    # consequence as the explicit patterns above and were the largest miss class in
-    # the eval set: none of them contain a demographic word at all.
+    # Bias that never names the protected trait, matched as a group term near a
+    # generalising frame rather than as fixed phrases -- see _GROUP / _FRAME below.
+    # These carry the same hiring consequence as the explicit patterns above and were
+    # the largest miss class: none of them contain a demographic word at all.
     "coded_proxy": [
-        # A whole group generalised into a deficiency.
-        r'\b(?:older|younger|elderly|young|senior|junior)\s+'
-        r'(?:candidates?|applicants?|workers?|employees?|people|staff|graduates?|hires?)\s+'
-        r'(?:simply\s+|generally\s+|usually\s+|often\s+)?'
-        r'(?:cannot|can\'t|can not|lack|struggle|rarely|tend|are\s+(?:less|not|rarely))\b',
-        # Caregiver status used as a proxy for commitment or availability.
-        r'\b(?:working\s+)?(?:mothers?|fathers?|parents?|pregnant\s+\w+)\s+'
-        r'(?:tend|are|is|rarely|usually|often|generally)\b',
         # Praise conditioned on group membership -- "articulate for someone from ...".
         r'\b(?:surprisingly|unusually|remarkably)\s+\w+(?:\s+\w+)?\s+for\s+'
         r'(?:a|an|someone|somebody|his|her|their)\b',
         r'\b(?:articulate|well[-\s]spoken|eloquent|intelligent|competent)\s+for\s+'
         r'(?:a|an|someone|somebody)\b',
-        # Origin or institution generalised into ability.
-        r'\b(?:candidates?|applicants?|people|students?|graduates?|they)\s+from\s+'
-        r'(?:that|those|this|these)\s+\w+\s+(?:are|tend)\s+'
-        r'(?:typically|usually|generally|often|to\s+be)\b',
         # "Culture fit" as the stated reason for a rejection.
         r'\b(?:not|isn\'t|is\s+not|aren\'t|are\s+not)\s+(?:really\s+)?(?:a\s+)?culture\s+fit\b',
     ],
@@ -70,6 +59,53 @@ _SEVERITY = {
     "gender_bias": 0.5,
     "age_bias": 0.5,
 }
+
+# ── coded-proxy slots ────────────────────────────────────────────────────────
+# The proxy families all have the same shape: a group referred to without naming the
+# protected trait, next to a frame that generalises the whole group into a deficiency.
+# Enumerating the sentences misses every paraphrase; matching the two halves separately
+# and requiring them to sit close together covers the family. Both halves are required,
+# which is what keeps "the team member is too junior for this role" out of it.
+_GROUP = re.compile(
+    r'\b(?:older|younger|elderly|young|aging|ageing|senior|junior|veteran|mature|'
+    r'fresh|recent|new)\s+'
+    r'(?:candidates?|applicants?|workers?|employees?|people|staff|graduates?|hires?|'
+    r'folks|engineers?|developers?|managers?)\b'
+    r'|\b(?:working\s+)?(?:mothers?|fathers?|parents?|caregivers?|carers?|'
+    r'pregnant\s+\w+|immigrants?|foreigners?)\b'
+    r'|\bat\s+(?:that|this|his|her|their|a\s+certain)\s+(?:stage\s+of\s+(?:life|career)|'
+    r'point\s+in\s+(?:life|their\s+career)|age)\b'
+    r'|\bof\s+(?:that|a\s+certain)\s+age\b'
+    r'|\bdigital\s+natives?\b'
+    r'|\b(?:candidates?|applicants?|people|students?|graduates?|they|someone)\s+'
+    r'(?:from|out\s+of)\s+(?:that|those|this|these)\s+\w+\b',
+    re.IGNORECASE,
+)
+
+# A universal quantifier over a protected class. On its own this is not bias -- "all
+# women in the study responded" is a count -- so it is scored only next to a frame.
+_QUANTIFIED = re.compile(
+    r'\b(?:all|most|every|any|typical)\s+(?:the\s+)?'
+    r'(?:m[ae]n|wom[ae]n|blacks?|whites?|asians?|hispanics?|latinos?|gays?|straights?|'
+    r'immigrants?|foreigners?|muslims?|christians?|jews?|hindus?|'
+    r'millennials?|boomers?|mothers?|fathers?)\b',
+    re.IGNORECASE,
+)
+
+# A frame that turns an individual judgement into a statement about the whole group.
+_FRAME = re.compile(
+    r'\b(?:cannot|can\s?not|can\'t|lack|lacks|struggles?|rarely|seldom|'
+    r'tends?\s+to|typically|usually|generally|often|always|never|'
+    r'(?:is|are|was|were)\s+(?:less|not|rarely|weaker|slower|typically|usually)|'
+    r'(?:isn\'t|aren\'t|don\'t|doesn\'t)|'
+    r'less\s+likely|more\s+(?:energy|drive|stamina|hunger)\s+than|'
+    r'set\s+in\s+(?:his|her|their)\s+ways|resistant\s+to\s+change|'
+    r'weaker|slower|behind\s+the\s+curve|not\s+a\s+fit|'
+    # generic-predicate deficiencies: the claim is about the group's outcomes
+    r'burns?\s+out|burn\s+out|wash\s+out|drop\s+out|quits?|underperform\w*|'
+    r'underprepared|underqualified|fails?)\b',
+    re.IGNORECASE,
+)
 
 # A negated or quoted mention is a discussion of bias, not an instance of it.
 _NEGATION = re.compile(
@@ -109,6 +145,20 @@ class BiasDetector(BaseDetector):
                         severity=severity,
                         detail=f"Detected {bias_type} language pattern."
                     ))
+
+        # Coded proxies: a group term sitting near a generalising frame, in either
+        # order -- "older candidates rarely adapt" and "more energy than a candidate at
+        # that stage of life" are the same claim with the halves swapped.
+        for group in (_GROUP, _QUANTIFIED):
+          for start, end in near(output_text, group, _FRAME, window=40, ordered=False):
+            if _NEGATION.search(output_text[:start]):
+                continue
+            severity = _SEVERITY["coded_proxy"]
+            max_score = max(max_score, severity)
+            flagged_spans.append(FlaggedSpan(
+                start=start, end=end, text=output_text[start:end],
+                categories=[RiskCategory.BIAS], severity=severity,
+                detail="Detected coded_proxy language pattern."))
 
         latency_ms = (time.time() - start_time) * 1000
 

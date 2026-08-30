@@ -1,20 +1,32 @@
 import json
 import os
 import time
-from collections import Counter
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.models.schemas import DetectionResult, RiskCategory
 from src.detectors.base import BaseDetector
+from src.state import StateStore, MemoryStore
 from src.config import config
 
 
 class CostDetector(BaseDetector):
-    """Cost estimation and retry tracking detector."""
+    """Cost estimation and retry tracking detector.
 
-    def __init__(self) -> None:
-        self.session_costs: Dict[str, float] = {}
-        self.session_inputs: Dict[str, Counter] = {}
+    Overrides `detect` rather than `scan` because its accounting lives in a
+    `StateStore` and reading it is genuinely async. The computation itself is a
+    handful of arithmetic -- no regex, nothing that holds the CPU -- so there is
+    nothing to hand to a worker thread.
+
+    Per-session state used to be two dicts on this object, which leaked (nothing ever
+    evicted them, and each entry held a Counter of whole prompts) and made the gateway
+    single-process. The store gives it a TTL and, behind Redis, one view shared by
+    every worker.
+    """
+
+    def __init__(self, store: Optional[StateStore] = None) -> None:
+        # Not `store or MemoryStore()`: MemoryStore defines __len__, so an empty
+        # store is falsy and would be replaced by a private one. See SessionTracker.
+        self.store = MemoryStore() if store is None else store
         # Bounds the per-session retry table. A session that asks more distinct
         # questions than this stops counting retries rather than growing without limit.
         self.max_tracked_prompts = config.max_tracked_prompts
@@ -38,26 +50,26 @@ class CostDetector(BaseDetector):
     def category(self) -> str:
         return RiskCategory.COST
 
+    @property
+    def _ttl(self) -> int:
+        return config.session_timeout_minutes * 60
+
+    @staticmethod
+    def _key(session_id: str) -> str:
+        return f"cost:{session_id}"
+
     def _estimate_tokens(self, text: str) -> int:
         return int(len(text.split()) * 1.3)
 
-    def forget_session(self, session_id: str) -> None:
+    async def forget_session(self, session_id: str) -> None:
         """Drops all accounting for a session once it is no longer live."""
-        self.session_costs.pop(session_id, None)
-        self.session_inputs.pop(session_id, None)
+        await self.store.delete(self._key(session_id))
 
-    def scan(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
+    async def detect(self, input_text: str, output_text: str, **kwargs: Any) -> DetectionResult:
         start_time = time.time()
 
         session_id = kwargs.get("session_id") or "default_session"
         model_name = kwargs.get("model_name") or config.llm_model
-
-        # Counter lookup is O(1); the previous list scan was O(n) per call, which made
-        # a long session quadratic in the number of turns.
-        seen = self.session_inputs.setdefault(session_id, Counter())
-        retry_count = seen[input_text]
-        if retry_count or len(seen) < self.max_tracked_prompts:
-            seen[input_text] += 1
 
         prompt_tokens = self._estimate_tokens(input_text)
         completion_tokens = self._estimate_tokens(output_text)
@@ -66,8 +78,24 @@ class CostDetector(BaseDetector):
         estimated_cost_usd = (prompt_tokens * model_pricing["prompt"] / 1000) + \
                              (completion_tokens * model_pricing["completion"] / 1000)
 
-        session_cost_usd = self.session_costs.get(session_id, 0.0) + estimated_cost_usd
-        self.session_costs[session_id] = session_cost_usd
+        # `prompts` is a dict rather than a Counter so it survives a JSON round trip.
+        # The lookup is still O(1); the original list scan made a long session
+        # quadratic in the number of turns.
+        seen_before = 0
+
+        def mutate(raw: Optional[dict]) -> dict:
+            nonlocal seen_before
+            state = raw or {"cost_usd": 0.0, "prompts": {}}
+            prompts = state["prompts"]
+            seen_before = prompts.get(input_text, 0)
+            if seen_before or len(prompts) < self.max_tracked_prompts:
+                prompts[input_text] = seen_before + 1
+            state["cost_usd"] = state["cost_usd"] + estimated_cost_usd
+            return state
+
+        state = await self.store.read_modify_write(self._key(session_id), self._ttl, mutate)
+        session_cost_usd = state["cost_usd"]
+        retry_count = seen_before
 
         score = 0.0
         if session_cost_usd >= config.cost_block_usd:
@@ -80,20 +108,16 @@ class CostDetector(BaseDetector):
         if retry_count >= config.cost_retry_escalate_count:
             score = max(score, 0.75)
 
-        latency_ms = (time.time() - start_time) * 1000
-
-        details = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "estimated_cost_usd": estimated_cost_usd,
-            "session_cost_usd": session_cost_usd,
-            "retry_count": retry_count
-        }
-
         return DetectionResult(
             category=RiskCategory.COST,
             score=score,
             flagged=score > 0,
-            details=details,
-            latency_ms=latency_ms
+            details={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "estimated_cost_usd": estimated_cost_usd,
+                "session_cost_usd": session_cost_usd,
+                "retry_count": retry_count,
+            },
+            latency_ms=(time.time() - start_time) * 1000,
         )
