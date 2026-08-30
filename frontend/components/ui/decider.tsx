@@ -22,7 +22,15 @@ const ON_BG: Record<Decision, string> = {
    scripts/export_metrics.py produces by driving the real pipeline. Hand-copying a
    "recorded run" into this file is how the fallback ends up describing behaviour the
    system no longer has. */
-const { input: INPUT, output: OUTPUT, contexts: CONTEXTS } = measured.sample;
+const { input: INPUT, output: OUTPUT, highlight: HIGHLIGHT, contexts: CONTEXTS } =
+  measured.sample;
+
+/* The sentence was literal JSX here while OUTPUT went to the API, so changing the
+   sample made the page show one thing and evaluate another. Split around the exported
+   fragment instead. */
+const HL_AT = OUTPUT.indexOf(HIGHLIGHT);
+const [BEFORE, AFTER] =
+  HL_AT === -1 ? [OUTPUT, ""] : [OUTPUT.slice(0, HL_AT), OUTPUT.slice(HL_AT + HIGHLIGHT.length)];
 
 /* Used only when the API is unreachable — and the UI says so rather than passing
    these off as live. */
@@ -97,8 +105,11 @@ export function Decider() {
         <div className="border-b border-rule p-6 lg:border-b-0 lg:border-r">
           <Label>The model said</Label>
           <blockquote className="m-0 border border-rule bg-paper px-4 py-3.5 font-mono text-[14px] leading-relaxed">
-            Your balance is $8,400 and the transfer was{" "}
-            <b className="border-b-2 border-warn font-semibold">approved by the CFO</b>.
+            {BEFORE}
+            {HL_AT !== -1 && (
+              <b className="border-b-2 border-warn font-semibold">{HIGHLIGHT}</b>
+            )}
+            {AFTER}
           </blockquote>
           <p className="mt-2 text-xs text-mute">This sentence never changes. Only the context below changes.</p>
 

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Decider } from "@/components/ui/decider";
 import { Counter, Panel, Reveal, TracingBeam } from "@/components/ui/motion-primitives";
 import measured from "@/lib/measured.json";
-import { cn } from "@/lib/utils";
+import { API_BASE, cn } from "@/lib/utils";
 
 const NAV = [
   ["Decisions", "#states"],
@@ -20,12 +20,25 @@ const STATES = [
   { n: "05", k: "Block", c: "text-block", h: "Stop", p: "The action does not happen. Correction may be attempted first." },
 ];
 
+/* Ceilings come from measured.json, which reads them out of src/config.py. Typed as
+   literals here they became a claim about a cap the code might no longer apply. */
+const FACT_CEILING = measured.ceilings.factualityHeuristic.toFixed(2);
+const INJ_CEILING = measured.ceilings.injection.toFixed(2);
+
+/* Held-out recall beside recall on phrasings nothing was tuned against. Aggregated in
+   scripts/export_metrics.py, where the underlying counts still exist -- averaging two
+   rounded recalls is not the same number. */
+const RECALL_ROWS = measured.recallComparison;
+const WORST = RECALL_ROWS.reduce((a, b) => (b.unseen < a.unseen ? b : a), RECALL_ROWS[0]);
+const worstUnseenRecall = WORST.unseen;
+const worstUnseenName = WORST.name;
+
 const CHECKS = [
-  { k: "Factuality", h: "Is the claim supported?", p: "Checks claims against supplied context documents, or samples an independent judge model and compares the answers. With no judge configured it falls back to a surface heuristic, capped at 0.55 so a guess can warn but never block.", wide: true },
+  { k: "Factuality", h: "Is the claim supported?", p: `Checks claims against supplied context documents, or samples an independent judge model and compares the answers. With no judge configured it falls back to a surface heuristic, capped at ${FACT_CEILING} so a guess can warn but never block.`, wide: true },
   { k: "Privacy", h: "What leaked?", p: "Scored by the worst thing found, not by how many matches landed. Private and loopback ranges are deliberately not treated as personal data." },
   { k: "Bias", h: "Aimed at a person?", p: "Patterns require a human target and skip negated mentions, so writing a policy against bias is not itself scored as bias." },
   { k: "Cost", h: "Is this session burning money?", p: "Tracks spend and repeated prompts per session. A repeated identical prompt means the caller is retrying a failing interaction — the signal that drives multi-turn escalation." },
-  { k: "Injection", h: "Is the prompt trying to take over?", p: "Five published families — instruction override, role reassignment, system-prompt exfiltration, guardrail evasion, delimiter smuggling. Capped at 0.70 so a regex escalates to a human rather than refusing traffic on its own." },
+  { k: "Injection", h: "Is the prompt trying to take over?", p: `Five published families — instruction override, role reassignment, system-prompt exfiltration, guardrail evasion, delimiter smuggling. Capped at ${INJ_CEILING} so a regex escalates to a human rather than refusing traffic on its own.` },
 ];
 
 const STEPS = [
@@ -142,7 +155,7 @@ export default function Page() {
           <TracingBeam>
             {STEPS.map((s, i) => (
               <Reveal key={s.h} className="relative pb-8 last:pb-0">
-                <div className="absolute -left-12 top-0 grid size-8 place-items-center -[9px] border border-rule bg-card font-mono text-xs font-semibold text-mute">
+                <div className="absolute -left-12 top-0 grid size-8 place-items-center border border-rule bg-card font-mono text-xs font-semibold text-mute">
                   {i + 1}
                 </div>
                 <h3 className="font-display text-[18px]">{s.h}</h3>
@@ -223,8 +236,8 @@ export default function Page() {
             // failure this project exists to catch.
             { v: <Counter to={measured.decisionStates} />, l: "Decision states, all reachable" },
             { v: <Counter to={measured.tests} />, l: "Tests, none of them mocking what they test" },
-            { v: <Counter to={measured.evalCases} />, l: "Labelled eval cases, split dev and held out" },
-            { v: measured.heldOutPrecision.toFixed(2), l: "Precision on the held-out split" },
+            { v: <Counter to={measured.evalCases} />, l: "Labelled eval cases, split dev, held out and unseen" },
+            { v: worstUnseenRecall.toFixed(2), l: `Worst recall on unseen phrasing (${worstUnseenName})` },
           ].map((s, i) => (
             <Reveal key={s.l} delay={i * 0.05}>
               <div className="h-full border border-rule bg-card p-6">
@@ -234,15 +247,40 @@ export default function Page() {
             </Reveal>
           ))}
         </div>
+        <div className="mt-3.5 overflow-x-auto border border-rule bg-card">
+          <table className="w-full border-collapse text-[13.5px]">
+            <thead>
+              <tr className="border-b border-rule text-left label text-mute">
+                <th className="px-5 py-3 font-normal">Detector</th>
+                <th className="px-5 py-3 text-right font-normal">Held-out recall</th>
+                <th className="px-5 py-3 text-right font-normal">Unseen phrasing</th>
+                <th className="px-5 py-3 text-right font-normal">Gap</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {RECALL_ROWS.map((r) => (
+                <tr key={r.name} className="border-b border-rule/60 last:border-0">
+                  <td className="px-5 py-3 font-sans">{r.name}</td>
+                  <td className="px-5 py-3 text-right">{r.heldOut.toFixed(2)}</td>
+                  <td className="px-5 py-3 text-right">{r.unseen.toFixed(2)}</td>
+                  <td className={cn("px-5 py-3 text-right", r.gap < -0.2 ? "text-block" : "text-mute")}>
+                    {r.gap >= 0 ? "+" : ""}{r.gap.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <Reveal>
           <Callout>
-            <b className="font-semibold text-ink">Held-out recall is 0.91 on privacy and 1.00 on bias and
-            injection. Offline factuality is 0.50, and that one is a ceiling, not a bug.</b> Without a
-            judge model the factuality branch reads surface shape only — it cannot know a plausible
-            sentence is false — so it is capped below every block threshold and can warn but never stop
-            anything on its own. Two gaps stay open rather than tuned away: a ticket id shaped like a
-            phone number still false-alarms, and driver&rsquo;s licences have no pattern. Both are
-            recorded in <Code>evals/gates.json</Code>.
+            <b className="font-semibold text-ink">The right-hand column is the honest one.</b> Both sets are
+            held out, but the first was written alongside the patterns, so it measures whether they still
+            work rather than whether they generalise. The unseen set is written to deliberately different
+            phrasings and was never used to adjust anything — and recall on it falls by two thirds for bias
+            and injection. That is what pattern matching does: it catches the wordings it was written for
+            and misses paraphrase. Privacy degrades least, because PII has real structure — checksums and
+            formats — rather than vocabulary. Closing that gap means a classifier, not more regexes. Every
+            known miss is recorded in <Code>evals/gates.json</Code> rather than tuned away.
           </Callout>
         </Reveal>
       </Section>
@@ -265,7 +303,7 @@ export default function Page() {
               <a href="/console.html" className="inline-flex h-11 items-center border border-block bg-block px-6 label text-paper transition hover:bg-ink hover:border-ink">
                 Open the console
               </a>
-              <a href="/docs" className="inline-flex h-11 items-center border border-ink px-6 label transition hover:bg-ink hover:text-paper">
+              <a href={`${API_BASE}/docs`} className="inline-flex h-11 items-center border border-ink px-6 label transition hover:bg-ink hover:text-paper">
                 Browse the API
               </a>
             </div>
@@ -292,7 +330,7 @@ function Brand() {
   return (
     <Link href="/" className="flex items-center gap-2.5">
       <span className="relative size-5.5 shrink-0 bg-ink">
-        <span className="spectrum absolute inset-x-1 top-[9.5px] h-[3px] -[1px]" />
+        <span className="spectrum absolute inset-x-1 top-[9.5px] h-[3px]" />
       </span>
       <span className="font-display text-lg tracking-[-0.01em]">Aether</span>
     </Link>

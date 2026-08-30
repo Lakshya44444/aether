@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync:console": "node scripts/sync-console.mjs",
+    "predev": "npm run sync:console",
+    "prebuild": "npm run sync:console"
   },
   "dependencies": {
     "clsx": "^2.1.1",

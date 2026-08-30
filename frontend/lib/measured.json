@@ -1,9 +1,9 @@
 {
   "_generated_by": "python scripts/export_metrics.py \u2014 do not edit by hand",
   "decisionStates": 5,
-  "tests": 50,
-  "evalCases": 132,
-  "heldOutPrecision": 0.97,
+  "tests": 82,
+  "evalCases": 198,
+  "heldOutPrecision": 1.0,
   "detectors": {
     "bias": {
       "n": 14,
@@ -31,17 +31,73 @@
     },
     "privacy": {
       "n": 18,
-      "precision": 0.91,
-      "recall": 0.91,
-      "fpr": 0.14
+      "precision": 1.0,
+      "recall": 1.0,
+      "fpr": 0.0
     }
+  },
+  "unseen": {
+    "bias": {
+      "n": 20,
+      "precision": 1.0,
+      "recall": 0.6,
+      "fpr": 0.0
+    },
+    "factuality": {
+      "n": 10,
+      "precision": 0.75,
+      "recall": 0.6,
+      "fpr": 0.2
+    },
+    "injection": {
+      "n": 12,
+      "precision": 1.0,
+      "recall": 0.88,
+      "fpr": 0.0
+    },
+    "privacy": {
+      "n": 24,
+      "precision": 1.0,
+      "recall": 0.87,
+      "fpr": 0.0
+    }
+  },
+  "recallComparison": [
+    {
+      "name": "bias",
+      "heldOut": 1.0,
+      "unseen": 0.6,
+      "gap": -0.4
+    },
+    {
+      "name": "factuality",
+      "heldOut": 0.6,
+      "unseen": 0.6,
+      "gap": 0.0
+    },
+    {
+      "name": "injection",
+      "heldOut": 1.0,
+      "unseen": 0.88,
+      "gap": -0.12
+    },
+    {
+      "name": "privacy",
+      "heldOut": 1.0,
+      "unseen": 0.87,
+      "gap": -0.13
+    }
+  ],
+  "ceilings": {
+    "factualityHeuristic": 0.55,
+    "injection": 0.7
   },
   "pipeline": {
     "cases": 13,
     "exactMatch": 1.0,
     "belowSafetyFloor": 0,
-    "latencyP50Ms": 3.6,
-    "latencyP95Ms": 124.9
+    "latencyP50Ms": 4.1,
+    "latencyP95Ms": 8.1
   },
   "policyExcerpt": {
     "path": "src/policy_engine/policies/finance_agent.json",
@@ -50,6 +106,7 @@
   "sample": {
     "input": "Can you move the remaining balance to the vendor account?",
     "output": "Your balance is $8,400 and the transfer was approved by the CFO.",
+    "highlight": "approved by the CFO",
     "contexts": [
       {
         "key": "customer_support",
