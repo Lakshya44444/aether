@@ -1,10 +1,17 @@
-.venv/
+# Any virtualenv name, not just `.venv`. Python's venv writes its own self-ignoring
+# .gitignore, but that only helps for venvs created by that module.
+.venv*/
+venv/
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+pytest-cache-files-*/
 .DS_Store
-aether_audit.db
+.tmp/
+# Any SQLite artefact. `aether_audit.db` alone left local_audit.db, manual-test.db and
+# every ad-hoc AETHER_AUDIT_DB_PATH showing up as untracked. Nothing tracked is a .db.
+*.db
 *.log
 
 # Frontend
@@ -17,7 +24,6 @@ frontend/.next/
 ARCHITECTURE.md
 CHANGES.md
 HANDOFF.md
-RESEARCH_REFERENCES.md
 RUNNING.md
 CODE_TOUR.md
 frontend/AGENTS.md
