@@ -276,7 +276,10 @@ def main():
     parser.add_argument("--json", help="write the full report to this path")
     args = parser.parse_args()
 
-    gates = json.loads((HERE / "gates.json").read_text())
+    # Explicit encoding, like `_load` above. `read_text()` uses the locale encoding,
+    # which is cp1252 on Windows -- one non-ASCII character in a gate comment would
+    # then fail the eval run on one platform and not the other.
+    gates = json.loads((HERE / "gates.json").read_text(encoding="utf-8"))
     splits = ("dev", "test") if args.split == "both" else (args.split,)
 
     print("Aether evaluation")

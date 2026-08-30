@@ -71,7 +71,7 @@ def policy_excerpt(use_case: str = "finance_agent") -> dict:
         by_class.setdefault(get_impact_class(impact, reversibility), []).append(action.value)
 
     path = ROOT / config.policies_dir / f"{use_case}.json"
-    policy = json.loads(path.read_text())
+    policy = json.loads(path.read_text(encoding="utf-8"))
 
     lines = [f'"risk_tier": {json.dumps(policy["risk_tier"])},',
              f'"fail_mode": {json.dumps(policy["fail_mode"])},',
@@ -196,13 +196,18 @@ def render_readme_table(detectors, unseen, decisions) -> str:
 
 
 def update_readme(table: str) -> bool:
-    text = README.read_text()
+    # Every read and write here names its encoding. Without that, `Path.read_text` and
+    # `Path.write_text` use the locale encoding, which is cp1252 on a default Windows
+    # install -- so running this script rewrote the README through cp1252 and destroyed
+    # the en-dash in the line it had just generated, leaving "300<U+FFFD>1000 ms". The
+    # corruption is silent and lands in the file the script exists to keep accurate.
+    text = README.read_text(encoding="utf-8")
     if README_START not in text or README_END not in text:
         print(f"  ! {README.name} has no {README_START} block; skipping")
         return False
     head, _, rest = text.partition(README_START)
     _, _, tail = rest.partition(README_END)
-    README.write_text(f"{head}{README_START}\n{table}\n{README_END}{tail}")
+    README.write_text(f"{head}{README_START}\n{table}\n{README_END}{tail}", encoding="utf-8")
     return True
 
 
@@ -258,7 +263,7 @@ def main() -> int:
     assert SAMPLE_HIGHLIGHT in SAMPLE_OUTPUT, "highlight must be a fragment of the sample"
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, indent=2) + "\n")
+    OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {OUT.relative_to(ROOT)}")
     if update_readme(render_readme_table(detectors, unseen, decisions)):
         print(f"wrote the measured block in {README.name}")

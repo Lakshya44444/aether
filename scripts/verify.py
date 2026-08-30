@@ -6,6 +6,7 @@ README and design doc make, and prints what the running system actually does.
     python scripts/verify.py
 """
 import asyncio
+import contextlib
 import json
 import os
 import pathlib
@@ -144,19 +145,21 @@ def probe_audit(c):
         ids = [ev(c2, output_text="His SSN is 123-45-6789.", use_case="customer_support",
                   action="generate_text")["trace"]["trace_id"] for _ in range(5)]
         assert c2.get("/api/audit/verify").json()["intact"]
-        conn = sqlite3.connect(DB)
+        with contextlib.closing(sqlite3.connect(DB)) as conn:
+            row = conn.execute(
+                "SELECT trace_json FROM decision_traces WHERE trace_id=?", (ids[2],)
+            ).fetchone()[0]
+            conn.execute("UPDATE decision_traces SET trace_json=? WHERE trace_id=?",
+                         (row + " ", ids[2]))
+            conn.commit()
+            check("mid-chain edit is detected", not c2.get("/api/audit/verify").json()["intact"])
+            conn.execute("UPDATE decision_traces SET trace_json=? WHERE trace_id=?", (row, ids[2]))
+            conn.commit()
 
-        row = conn.execute("SELECT trace_json FROM decision_traces WHERE trace_id=?", (ids[2],)).fetchone()[0]
-        conn.execute("UPDATE decision_traces SET trace_json=? WHERE trace_id=?", (row + " ", ids[2]))
-        conn.commit()
-        check("mid-chain edit is detected", not c2.get("/api/audit/verify").json()["intact"])
-        conn.execute("UPDATE decision_traces SET trace_json=? WHERE trace_id=?", (row, ids[2]))
-        conn.commit()
-
-        conn.execute("DELETE FROM decision_traces WHERE trace_id=?", (ids[4],))
-        conn.commit()
-        check("tail truncation is detected", not c2.get("/api/audit/verify").json()["intact"],
-              "newest row deleted, chain still reports intact")
+            conn.execute("DELETE FROM decision_traces WHERE trace_id=?", (ids[4],))
+            conn.commit()
+            check("tail truncation is detected", not c2.get("/api/audit/verify").json()["intact"],
+                  "newest row deleted, chain still reports intact")
 
     if os.path.exists(DB):
         os.remove(DB)
@@ -167,13 +170,13 @@ def probe_audit(c):
                                      "reviewer_id": "real", "reason": "genuine risk"})
         assert c3.get("/api/audit/verify").json()["intact"]
 
-        conn = sqlite3.connect(DB)
-        row = conn.execute("SELECT trace_json FROM decision_traces WHERE kind='review'").fetchone()[0]
-        conn.execute("UPDATE decision_traces SET trace_json=? WHERE kind='review'",
-                     (row.replace('"approved": false', '"approved": true'),))
-        conn.commit()
-        check("a flipped human-review verdict is detected",
-              not c3.get("/api/audit/verify").json()["intact"])
+        with contextlib.closing(sqlite3.connect(DB)) as conn:
+            row = conn.execute("SELECT trace_json FROM decision_traces WHERE kind='review'").fetchone()[0]
+            conn.execute("UPDATE decision_traces SET trace_json=? WHERE kind='review'",
+                         (row.replace('"approved": false', '"approved": true'),))
+            conn.commit()
+            check("a flipped human-review verdict is detected",
+                  not c3.get("/api/audit/verify").json()["intact"])
 
 
 async def probe_accuracy():
@@ -188,7 +191,7 @@ async def probe_accuracy():
     print("\n8. detector recall on phrasings never used to tune anything")
     from evals.run import check_gates, eval_unseen  # noqa: E402
 
-    gates = json.loads((ROOT / "evals" / "gates.json").read_text())
+    gates = json.loads((ROOT / "evals" / "gates.json").read_text(encoding="utf-8"))
     buckets = await eval_unseen()
     for key in sorted(buckets):
         c = buckets[key]
