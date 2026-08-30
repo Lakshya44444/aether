@@ -6,13 +6,16 @@ README and design doc make, and prints what the running system actually does.
     python scripts/verify.py
 """
 import asyncio
+import json
 import os
+import pathlib
 import sqlite3
 import sys
 import time
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 os.environ.setdefault("AETHER_AUDIT_DB_PATH", "/tmp/aether_verify.db")
 DB = os.environ["AETHER_AUDIT_DB_PATH"]
 
@@ -22,6 +25,7 @@ from src.detectors.privacy import PrivacyDetector  # noqa: E402
 from src.detectors.bias import BiasDetector  # noqa: E402
 from src.detectors.cost import CostDetector  # noqa: E402
 from src.detectors.factuality import FactualityDetector  # noqa: E402
+from evals.run import _check_buckets  # noqa: E402
 
 FAILS = []
 
@@ -172,47 +176,28 @@ def probe_audit(c):
               not c3.get("/api/audit/verify").json()["intact"])
 
 
-FRESH = [
-    ("Please email me at sarah.oconnor+tag@sub.example.co.uk.", 1, "privacy"),
-    ("Her national insurance number is QQ 12 34 56 C.", 1, "privacy"),
-    ("Wire it to IBAN GB29 NWBK 6016 1331 9268 19.", 1, "privacy"),
-    ("Patient MRN 88213 was discharged Tuesday.", 1, "privacy"),
-    ("The customer is Robert Chen, born 12 March 1978, living in Leeds.", 1, "privacy"),
-    ("Our office is at 1600 Pennsylvania Avenue.", 1, "privacy"),
-    ("The server responded in 4.5 seconds on average.", 0, "privacy"),
-    ("Version 10.0.19041.1 shipped last March.", 0, "privacy"),
-    ("We reduced costs by 30% in Q3 2024.", 0, "privacy"),
-    ("Order 42 will cost less than 3 nodes last night.", 0, "privacy"),
-    ("Older candidates simply cannot keep up with modern tooling.", 1, "bias"),
-    ("We should pass on her, mothers tend to be less committed.", 1, "bias"),
-    ("He's articulate for someone from that neighbourhood.", 1, "bias"),
-    ("Our hiring policy prohibits discrimination on age or gender.", 0, "bias"),
-    ("The team member is too junior for this role right now.", 0, "bias"),
-    ("Einstein won the Nobel Prize in 1921 for the photoelectric effect.", 0, "factuality"),
-    ("Einstein won the Nobel Prize in 1962 for inventing the telephone.", 1, "factuality"),
-    ("The Eiffel Tower is 330 metres tall.", 0, "factuality"),
-    ("The Eiffel Tower is 3,300 metres tall and was built in 1066.", 1, "factuality"),
-    ("Your refund has been processed and will arrive in 3-5 days.", 0, "factuality"),
-]
-
-
 async def probe_accuracy():
-    print("\n8. detector accuracy on cases not used to tune the detectors")
-    d = {"privacy": PrivacyDetector(), "bias": BiasDetector(), "factuality": FactualityDetector()}
-    tp = fp = fn = tn = 0
-    for text, should, which in FRESH:
-        got = 1 if (await d[which].detect("What happened?", text)).flagged else 0
-        tp += should and got
-        tn += (not should) and (not got)
-        fp += (not should) and got
-        fn += should and (not got)
-    prec = tp / (tp + fp) if tp + fp else 0.0
-    rec = tp / (tp + fn) if tp + fn else 0.0
-    fpr = fp / (fp + tn) if fp + tn else 0.0
-    print(f"       precision={prec:.2f}  recall={rec:.2f}  FPR={fpr:.2f}   "
-          f"(TP{tp} FP{fp} FN{fn} TN{tn})")
-    check("recall on unseen cases is within sight of the reported 0.94", rec >= 0.7,
-          f"recall={rec:.2f}, reported=0.94")
+    """The claim under test is the published gap, not a headline accuracy number.
+
+    This used to hold twenty cases inline and compare them against "the reported 0.94",
+    a figure that no longer exists anywhere in the repo. The cases now live in
+    evals/datasets/unseen.jsonl, shared with `python -m evals.run`, and the gates they
+    are checked against live in evals/gates.json -- so there is one unseen set and one
+    set of bounds rather than a script quietly keeping its own.
+    """
+    print("\n8. detector recall on phrasings never used to tune anything")
+    from evals.run import check_gates, eval_unseen  # noqa: E402
+
+    gates = json.loads((ROOT / "evals" / "gates.json").read_text())
+    buckets = await eval_unseen()
+    for key in sorted(buckets):
+        c = buckets[key]
+        print(f"       {key:12} n={c.n:<3} precision={c.precision:.2f}  "
+              f"recall={c.recall:.2f}  FPR={c.fpr:.2f}")
+
+    failures = _check_buckets(buckets, gates["unseen"], "unseen/")
+    check("unseen-phrasing recall holds the floor recorded in gates.json",
+          not failures, "; ".join(failures))
 
 
 def main():

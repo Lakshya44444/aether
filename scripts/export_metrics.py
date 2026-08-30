@@ -28,17 +28,25 @@ os.environ.setdefault(
     "AETHER_AUDIT_DB_PATH", os.path.join(tempfile.mkdtemp(prefix="aether-metrics-"), "audit.db")
 )
 
-from evals.run import eval_decisions, eval_detectors, _load  # noqa: E402
+from evals.run import eval_decisions, eval_detectors, eval_unseen, _load  # noqa: E402
 from src.config import config  # noqa: E402
 from src.models.schemas import Decision  # noqa: E402
 
 OUT = ROOT / "frontend" / "lib" / "measured.json"
+README = ROOT / "README.md"
+README_START = "<!-- measured:start -->"
+README_END = "<!-- measured:end -->"
 
 # The one sentence the landing page governs three ways. Defined here, not in the
 # component, so the recorded fallback below cannot describe a different input than
 # the live call makes.
 SAMPLE_INPUT = "Can you move the remaining balance to the vendor account?"
 SAMPLE_OUTPUT = "Your balance is $8,400 and the transfer was approved by the CFO."
+# The fragment the page underlines. Exported rather than written into the component,
+# because the component used to hard-code the whole sentence as literal JSX while
+# sending this one to the API -- so changing the sample here made the page display one
+# sentence and evaluate a different one.
+SAMPLE_HIGHLIGHT = "approved by the CFO"
 CONTEXTS = [
     {"key": "customer_support", "action": "generate_text",
      "label": "Support chatbot", "sub": "generate_text"},
@@ -137,8 +145,70 @@ async def record_sample_run() -> dict:
     return recorded
 
 
+def recall_comparison(detectors, unseen) -> list:
+    """Held-out recall beside unseen-phrasing recall, per detector.
+
+    Aggregated here rather than in the page, because the held-out numbers are split by
+    regime (factuality/evidence, factuality/heuristic) and combining two rounded
+    recalls is not the same as recomputing one from the counts.
+    """
+    rows = []
+    for name in sorted(unseen):
+        matching = [c for key, c in detectors.items() if key.split("/")[0] == name]
+        if not matching:
+            continue
+        tp = sum(c.tp for c in matching)
+        fn = sum(c.fn for c in matching)
+        held_out = tp / (tp + fn) if tp + fn else 0.0
+        rows.append({
+            "name": name,
+            "heldOut": round(held_out, 2),
+            "unseen": round(unseen[name].recall, 2),
+            "gap": round(unseen[name].recall - held_out, 2),
+        })
+    return rows
+
+
+def render_readme_table(detectors, unseen, decisions) -> str:
+    """The measured table as the README prints it.
+
+    Hand-typed before, and already drifting: the README claimed a p95 the code no
+    longer produced.
+    """
+    rows = [
+        "| Detector | n | Precision | Recall | FPR | Recall on unseen phrasing |",
+        "|---|---|---|---|---|---|",
+    ]
+    for key in sorted(detectors):
+        c = detectors[key]
+        u = unseen.get(key.split("/")[0])
+        unseen_cell = f"{u.recall:.2f} (n={u.n})" if u else "—"
+        rows.append(f"| {key} | {c.n} | {c.precision:.2f} | {c.recall:.2f} | "
+                    f"{c.fpr:.2f} | {unseen_cell} |")
+    rows.append("")
+    rows.append(
+        f"End to end: {decisions['n']} cases, exact decision match "
+        f"{decisions['exact_match']:.2f}, {decisions['floor_violations']} below the "
+        f"safety floor, p50 {decisions['latency_p50_ms']:.0f} ms, p95 "
+        f"{decisions['latency_p95_ms']:.0f} ms against budgets of 300–1000 ms."
+    )
+    return "\n".join(rows)
+
+
+def update_readme(table: str) -> bool:
+    text = README.read_text()
+    if README_START not in text or README_END not in text:
+        print(f"  ! {README.name} has no {README_START} block; skipping")
+        return False
+    head, _, rest = text.partition(README_START)
+    _, _, tail = rest.partition(README_END)
+    README.write_text(f"{head}{README_START}\n{table}\n{README_END}{tail}")
+    return True
+
+
 def main() -> int:
     detectors = asyncio.run(eval_detectors("test"))
+    unseen = asyncio.run(eval_unseen())
     decisions = asyncio.run(eval_decisions("test"))
     recorded = asyncio.run(record_sample_run())
 
@@ -151,12 +221,27 @@ def main() -> int:
         "_generated_by": "python scripts/export_metrics.py — do not edit by hand",
         "decisionStates": len(Decision),
         "tests": count_tests(),
-        "evalCases": len(_load("detectors.jsonl")) + len(_load("decisions.jsonl")),
+        "evalCases": (len(_load("detectors.jsonl")) + len(_load("decisions.jsonl"))
+                      + len(_load("unseen.jsonl"))),
         "heldOutPrecision": round(weighted_precision, 2),
         "detectors": {
             key: {"n": c.n, "precision": round(c.precision, 2),
                   "recall": round(c.recall, 2), "fpr": round(c.fpr, 2)}
             for key, c in sorted(detectors.items())
+        },
+        # Same detectors, phrasings none of them were written against. The page reports
+        # this next to the held-out numbers rather than instead of them: the gap between
+        # the two is the honest statement about how these detectors generalise.
+        "unseen": {
+            key: {"n": c.n, "precision": round(c.precision, 2),
+                  "recall": round(c.recall, 2), "fpr": round(c.fpr, 2)}
+            for key, c in sorted(unseen.items())
+        },
+        "recallComparison": recall_comparison(detectors, unseen),
+        # Detector ceilings, so the page cannot quote a cap the code does not apply.
+        "ceilings": {
+            "factualityHeuristic": config.factuality_heuristic_ceiling,
+            "injection": config.injection_ceiling,
         },
         "pipeline": {
             "cases": decisions["n"],
@@ -167,14 +252,20 @@ def main() -> int:
         },
         "policyExcerpt": policy_excerpt(),
         "sample": {"input": SAMPLE_INPUT, "output": SAMPLE_OUTPUT,
+                   "highlight": SAMPLE_HIGHLIGHT,
                    "contexts": CONTEXTS, "recorded": recorded},
     }
+    assert SAMPLE_HIGHLIGHT in SAMPLE_OUTPUT, "highlight must be a fragment of the sample"
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {OUT.relative_to(ROOT)}")
+    if update_readme(render_readme_table(detectors, unseen, decisions)):
+        print(f"wrote the measured block in {README.name}")
     print(f"  {payload['tests']} tests · {payload['evalCases']} eval cases · "
           f"precision {payload['heldOutPrecision']:.2f}")
+    for key in sorted(unseen):
+        print(f"  unseen {key:12} recall {unseen[key].recall:.2f}")
     for key, decision in recorded.items():
         print(f"  {key:18} {decision['decision']}")
     return 0

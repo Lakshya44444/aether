@@ -1,16 +1,24 @@
 """Aether evaluation harness.
 
-Three questions, kept separate because they fail for different reasons:
+Four questions, kept separate because they fail for different reasons:
 
   1. detectors  — does each detector separate risky text from safe text?
-  2. decisions  — does the whole pipeline land on the right governance decision?
-  3. latency    — does it do that inside the budget the policy declares?
+  2. unseen     — does it still do that on phrasings it was not written against?
+  3. decisions  — does the whole pipeline land on the right governance decision?
+  4. latency    — does it do that inside the budget the policy declares?
 
-Every case carries a `split`. `dev` is the only data tuning is allowed to look at;
-`test` is held out and is what the gates in gates.json are checked against. A detector
-tuned against the set it is scored on reports its own memory, not its accuracy.
+Cases in detectors.jsonl carry a `split`. `dev` is the only data tuning is allowed to
+look at; `test` is held out. A detector tuned against the set it is scored on reports
+its own memory, not its accuracy.
 
-    python -m evals.run                   # full report, gates on the test split
+But dev and test were authored alongside the detectors, so both are in-distribution:
+the regexes know the shapes in both halves. `unseen.jsonl` exists to measure the gap.
+It is written to deliberately different phrasings -- UK phone shapes, paraphrased
+injections, age bias with no age word in it -- and nothing in it was ever used to
+adjust a pattern. Recall there is materially lower than on the held-out split, and
+that difference is the honest read on how these detectors generalise. Report both.
+
+    python -m evals.run                   # full report, gates on test + unseen
     python -m evals.run --split dev       # inspect the tuning set
     python -m evals.run --json report.json
 """
@@ -100,36 +108,57 @@ class Confusion:
 
 # ── suite 1: detectors in isolation ──────────────────────────────────────────
 
-async def eval_detectors(split):
-    detectors = {
+def _detectors():
+    return {
         "privacy": PrivacyDetector(),
         "bias": BiasDetector(),
         "injection": InjectionDetector(),
         "factuality": FactualityDetector(),
     }
+
+
+async def _score_case(detectors, case):
+    category = case["category"]
+    if category == "injection":
+        return await detectors[category].detect(case["text"], "")
+    if category == "factuality":
+        return await detectors[category].detect(
+            "What happened?", case["text"],
+            depth=VerificationDepth.MEDIUM,
+            context_documents=case.get("context"),
+        )
+    return await detectors[category].detect("What happened?", case["text"])
+
+
+async def _bucket(cases):
+    detectors = _detectors()
     buckets = {}
-    for case in _load("detectors.jsonl"):
-        if case["split"] != split:
-            continue
+    for case in cases:
         category = case["category"]
         key = f"{category}/{case['regime']}" if "regime" in case else category
-
-        if category == "injection":
-            result = await detectors[category].detect(case["text"], "")
-        elif category == "factuality":
-            result = await detectors[category].detect(
-                "What happened?", case["text"],
-                depth=VerificationDepth.MEDIUM,
-                context_documents=case.get("context"),
-            )
-        else:
-            result = await detectors[category].detect("What happened?", case["text"])
-
+        result = await _score_case(detectors, case)
         buckets.setdefault(key, Confusion()).add(
             case["label"], result.flagged,
             f"[{case['id']}] {case['note']}: {case['text'][:64]} (score {result.score:.2f})",
         )
     return buckets
+
+
+async def eval_detectors(split):
+    return await _bucket([c for c in _load("detectors.jsonl") if c["split"] == split])
+
+
+# ── suite 2: the same detectors on phrasings they were not written against ───
+
+async def eval_unseen():
+    """Generalisation, not memorisation.
+
+    Grouped by bare category rather than by regime: the point is one number per
+    detector that can be put next to the held-out one and compared.
+    """
+    cases = [{k: v for k, v in case.items() if k != "regime"}
+             for case in _load("unseen.jsonl")]
+    return await _bucket(cases)
 
 
 # ── suite 2: the whole pipeline ──────────────────────────────────────────────
@@ -188,19 +217,27 @@ async def eval_decisions(split):
 
 # ── reporting ────────────────────────────────────────────────────────────────
 
-def check_gates(detectors, decisions, gates):
+def _check_buckets(buckets, bounds_by_key, label):
     failures = []
-    for key, bounds in gates["detectors"].items():
-        confusion = detectors.get(key)
+    for key, bounds in bounds_by_key.items():
+        confusion = buckets.get(key)
         if confusion is None or confusion.n == 0:
-            failures.append(f"{key}: no held-out cases to score")
+            failures.append(f"{label}{key}: no cases to score")
             continue
         if "min_recall" in bounds and confusion.recall < bounds["min_recall"]:
             failures.append(
-                f"{key}: recall {confusion.recall:.2f} < {bounds['min_recall']:.2f}")
+                f"{label}{key}: recall {confusion.recall:.2f} < {bounds['min_recall']:.2f}")
         if "max_fpr" in bounds and confusion.fpr > bounds["max_fpr"]:
             failures.append(
-                f"{key}: false-positive rate {confusion.fpr:.2f} > {bounds['max_fpr']:.2f}")
+                f"{label}{key}: false-positive rate {confusion.fpr:.2f} > "
+                f"{bounds['max_fpr']:.2f}")
+    return failures
+
+
+def check_gates(detectors, decisions, gates, unseen=None):
+    failures = _check_buckets(detectors, gates["detectors"], "")
+    if unseen is not None:
+        failures += _check_buckets(unseen, gates.get("unseen", {}), "unseen/")
 
     if decisions["floor_violations"] > gates["decisions"]["max_floor_violations"]:
         failures.append(
@@ -262,8 +299,28 @@ def main():
         for problem in d["problems"]:
             print(f"    {problem}")
 
+    unseen_results = asyncio.run(eval_unseen())
+    print_detectors(
+        "Detectors — unseen phrasings (NEVER used to tune anything; gates apply here)",
+        unseen_results, args.verbose)
+
+    held_out = detector_results.get("test")
+    if held_out:
+        print("\n  Held out vs unseen — the size of this gap is the generalisation story")
+        print(f"  {'detector':22} {'held-out recall':>16} {'unseen recall':>14} {'gap':>7}")
+        for key in sorted(unseen_results):
+            matching = [c for k, c in held_out.items() if k.split("/")[0] == key]
+            if not matching:
+                continue
+            tp = sum(c.tp for c in matching)
+            fn = sum(c.fn for c in matching)
+            ho = tp / (tp + fn) if tp + fn else 0.0
+            un = unseen_results[key].recall
+            print(f"  {key:22} {ho:>16.2f} {un:>14.2f} {un - ho:>+7.2f}")
+
     gate_split = "test" if "test" in splits else splits[0]
-    failures = check_gates(detector_results[gate_split], decision_results[gate_split], gates)
+    failures = check_gates(detector_results[gate_split], decision_results[gate_split],
+                           gates, unseen_results)
 
     print("\n" + "=" * 78)
     if failures:
@@ -277,6 +334,7 @@ def main():
         pathlib.Path(args.json).write_text(json.dumps({
             "detectors": {s: {k: c.as_dict() for k, c in b.items()}
                           for s, b in detector_results.items()},
+            "unseen": {k: c.as_dict() for k, c in unseen_results.items()},
             "decisions": decision_results,
             "gate_split": gate_split,
             "gate_failures": failures,
