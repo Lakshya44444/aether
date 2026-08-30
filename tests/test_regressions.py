@@ -4,6 +4,7 @@ Each test pins one behaviour that was previously wrong. They are written to fail
 the original defect returns, not to describe the current implementation.
 """
 import asyncio
+import json
 import re
 import sqlite3
 
@@ -244,6 +245,30 @@ async def test_a_component_keeps_the_store_it_is_given():
     assert not store, "an empty store must still be falsy for this test to mean anything"
     assert CostDetector(store).store is store
     assert SessionTracker(store).store is store
+
+
+@pytest.mark.asyncio
+async def test_retry_table_stores_no_prompt_text():
+    """The retry table used the whole prompt as its key.
+
+    That made the state store the one place a prompt was kept in the clear, while the
+    audit log masks detected spans and the log lines carry no text at all. Retry
+    counting needs equality and nothing else, so it keys on a digest -- which also
+    bounds the entry, since a prompt may be `max_text_chars` long.
+    """
+    store = MemoryStore()
+    detector = CostDetector(store)
+    secret = "please charge card 4532015112830366 for jane@acme.com"
+
+    for _ in range(4):
+        result = await detector.detect(secret, "done", session_id="pii")
+
+    stored = json.dumps(await store.get("cost:pii"))
+    assert "4532015112830366" not in stored
+    assert "jane@acme.com" not in stored
+    assert "please charge card" not in stored
+    # The point of the table survives the change.
+    assert result.details["retry_count"] == 3
 
 
 @pytest.mark.asyncio

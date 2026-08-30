@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -81,15 +82,25 @@ class CostDetector(BaseDetector):
         # `prompts` is a dict rather than a Counter so it survives a JSON round trip.
         # The lookup is still O(1); the original list scan made a long session
         # quadratic in the number of turns.
+        #
+        # Keyed by digest, not by the prompt. Retry counting needs equality and nothing
+        # else, so storing the text bought nothing and cost two things. It put raw
+        # prompts in the state store in the clear -- the one place PII was still kept
+        # verbatim, while the audit log goes to the trouble of masking it and the log
+        # lines omit it entirely. And it made the value unbounded in practice: a request
+        # may carry `max_text_chars` (100 KB by default) and `max_tracked_prompts` is
+        # 512, so one session could hold ~51 MB that every subsequent turn re-parsed and
+        # re-serialised. A digest is 64 characters whatever the prompt was.
+        prompt_digest = hashlib.sha256(input_text.encode("utf-8")).hexdigest()
         seen_before = 0
 
         def mutate(raw: Optional[dict]) -> dict:
             nonlocal seen_before
             state = raw or {"cost_usd": 0.0, "prompts": {}}
             prompts = state["prompts"]
-            seen_before = prompts.get(input_text, 0)
+            seen_before = prompts.get(prompt_digest, 0)
             if seen_before or len(prompts) < self.max_tracked_prompts:
-                prompts[input_text] = seen_before + 1
+                prompts[prompt_digest] = seen_before + 1
             state["cost_usd"] = state["cost_usd"] + estimated_cost_usd
             return state
 
