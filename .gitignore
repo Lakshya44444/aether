@@ -23,3 +23,9 @@ CODE_TOUR.md
 frontend/AGENTS.md
 frontend/CLAUDE.md
 frontend/README.md
+
+# The operator console has one home: dashboard/. `npm run build` copies it into
+# frontend/public so the static export carries it. Two tracked copies drift.
+frontend/public/app.js
+frontend/public/console.html
+frontend/public/styles.css
