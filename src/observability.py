@@ -166,12 +166,15 @@ class Metrics:
                 "# TYPE aether_evaluate_latency_ms histogram",
             ]
             for use_case in sorted(self._latency_total):
-                cumulative = 0
+                # Already cumulative: `observe_decision` increments every bucket whose
+                # bound the observation is under, which is what Prometheus means by
+                # `le`. Nothing is summed here. (A running total was initialised at this
+                # point and then overwritten on every iteration, which read as if the
+                # accumulation happened here and it does not.)
                 for bound in _BUCKETS_MS:
-                    cumulative = self._latency_counts[use_case][bound]
                     lines.append(
                         f'aether_evaluate_latency_ms_bucket{{use_case="{use_case}",'
-                        f'le="{bound}"}} {cumulative}'
+                        f'le="{bound}"}} {self._latency_counts[use_case][bound]}'
                     )
                 total = self._latency_total[use_case]
                 lines.append(

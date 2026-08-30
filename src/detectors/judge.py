@@ -20,20 +20,19 @@ def judge_configured() -> bool:
     return bool(config.llm_api_key) and not config.demo_mode
 
 
-async def _complete(prompt: str, temperature: float, timeout: float) -> str:
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            f"{config.llm_api_base.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {config.llm_api_key}"},
-            json={
-                "model": config.judge_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": config.judge_max_tokens,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+async def _complete(client: httpx.AsyncClient, prompt: str, temperature: float) -> str:
+    resp = await client.post(
+        f"{config.llm_api_base.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {config.llm_api_key}"},
+        json={
+            "model": config.judge_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": config.judge_max_tokens,
+        },
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 async def sample_answers(question: str, n: int, timeout: float) -> List[str]:
@@ -45,10 +44,14 @@ async def sample_answers(question: str, n: int, timeout: float) -> List[str]:
     if not judge_configured():
         raise JudgeUnavailable("no judge model configured")
     prompt = f"Answer concisely and factually.\n\nQuestion: {question}\nAnswer:"
-    results = await asyncio.gather(
-        *[_complete(prompt, temperature=1.0, timeout=timeout) for _ in range(n)],
-        return_exceptions=True,
-    )
+    # One client for the whole fan-out. A client per sample meant a fresh connection
+    # and a fresh TLS handshake for each of them, paid serially inside a detector that
+    # runs against a latency budget; pooled, the samples share one connection.
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        results = await asyncio.gather(
+            *[_complete(client, prompt, temperature=1.0) for _ in range(n)],
+            return_exceptions=True,
+        )
     answers = [r for r in results if isinstance(r, str)]
     if not answers:
         raise JudgeUnavailable("all judge samples failed")

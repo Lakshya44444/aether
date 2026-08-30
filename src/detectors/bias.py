@@ -150,15 +150,15 @@ class BiasDetector(BaseDetector):
         # order -- "older candidates rarely adapt" and "more energy than a candidate at
         # that stage of life" are the same claim with the halves swapped.
         for group in (_GROUP, _QUANTIFIED):
-          for start, end in near(output_text, group, _FRAME, window=40, ordered=False):
-            if _NEGATION.search(output_text[:start]):
-                continue
-            severity = _SEVERITY["coded_proxy"]
-            max_score = max(max_score, severity)
-            flagged_spans.append(FlaggedSpan(
-                start=start, end=end, text=output_text[start:end],
-                categories=[RiskCategory.BIAS], severity=severity,
-                detail="Detected coded_proxy language pattern."))
+            for start, end in near(output_text, group, _FRAME, window=40, ordered=False):
+                if _NEGATION.search(output_text[:start]):
+                    continue
+                severity = _SEVERITY["coded_proxy"]
+                max_score = max(max_score, severity)
+                flagged_spans.append(FlaggedSpan(
+                    start=start, end=end, text=output_text[start:end],
+                    categories=[RiskCategory.BIAS], severity=severity,
+                    detail="Detected coded_proxy language pattern."))
 
         latency_ms = (time.time() - start_time) * 1000
 
