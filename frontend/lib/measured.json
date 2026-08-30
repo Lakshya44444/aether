@@ -1,7 +1,7 @@
 {
   "_generated_by": "python scripts/export_metrics.py \u2014 do not edit by hand",
   "decisionStates": 5,
-  "tests": 82,
+  "tests": 84,
   "evalCases": 198,
   "heldOutPrecision": 1.0,
   "detectors": {
@@ -96,8 +96,8 @@
     "cases": 13,
     "exactMatch": 1.0,
     "belowSafetyFloor": 0,
-    "latencyP50Ms": 4.1,
-    "latencyP95Ms": 8.1
+    "latencyP50Ms": 1.0,
+    "latencyP95Ms": 1.9
   },
   "policyExcerpt": {
     "path": "src/policy_engine/policies/finance_agent.json",
