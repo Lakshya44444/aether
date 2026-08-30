@@ -18,9 +18,8 @@ from src.models.schemas import Decision
 @pytest.fixture
 def client():
     with TestClient(aether.app) as c:
-        aether.session_tracker.sessions.clear()
-        aether.cost_detector.session_costs.clear()
-        aether.cost_detector.session_inputs.clear()
+        # One store now holds both the session tracker's and the cost detector's state.
+        aether.state_store.clear()
         yield c
 
 
@@ -45,15 +44,40 @@ def test_clean_traffic_is_allowed(client):
 
 def test_trace_records_every_detector_that_ran(client):
     categories = {r["category"] for r in _evaluate(client)["trace"]["detection_results"]}
-    assert categories == {"factuality", "privacy", "bias", "cost", "injection"}
+    assert categories == {"factuality", "privacy", "input_privacy", "bias", "cost", "injection"}
 
 
 def test_input_side_findings_are_tagged_as_input(client):
     """Input spans index the prompt, so anything reading spans must be able to tell."""
     trace = _evaluate(client, input_text="My SSN is 412-88-7391.")["trace"]
-    sides = {r["details"].get("side") for r in trace["detection_results"]
-             if r["category"] == "privacy"}
-    assert sides == {"input", None}
+    by_category = {r["category"]: r for r in trace["detection_results"]}
+    assert by_category["input_privacy"]["details"]["side"] == "input"
+    assert by_category["privacy"]["details"].get("side") is None
+
+
+def test_prompt_pii_never_selects_redact(client):
+    """REDACT masks the completion. A prompt has already been sent, so masking the
+    completion does not undo it -- and there is nothing in the completion to mask."""
+    result = _evaluate(
+        client,
+        input_text="Please email me at maria.lopez@northwind-trading.com about my order.",
+        output_text="Your order has shipped and should arrive on Friday.",
+        use_case="customer_support",
+        action="generate_text",
+    )
+    assert result["decision"] != Decision.REDACT, result["reason"]
+
+
+def test_a_redact_decision_always_returns_masked_text(client):
+    """A caller told REDACT must receive text that differs from what it sent."""
+    result = _evaluate(
+        client,
+        output_text="Reach the account holder at maria.lopez@northwind-trading.com.",
+        use_case="customer_support",
+        action="generate_text",
+    )
+    assert result["decision"] == Decision.REDACT, result["reason"]
+    assert result["corrected_output"] and "maria.lopez" not in result["corrected_output"]
 
 
 def test_oversized_body_is_rejected_before_any_work(client):

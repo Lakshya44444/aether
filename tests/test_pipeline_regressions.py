@@ -7,6 +7,7 @@ import asyncio
 import os
 import sqlite3
 import tempfile
+import time
 
 import pytest
 
@@ -24,9 +25,7 @@ from src.models.schemas import (
 @pytest.fixture(autouse=True)
 async def _clean_state():
     await M.audit_logger.init_db()
-    M.session_tracker.sessions.clear()
-    M.cost_detector.session_costs.clear()
-    M.cost_detector.session_inputs.clear()
+    M.state_store.clear()
     yield
 
 
@@ -178,6 +177,15 @@ async def test_audit_chain_detects_a_rewritten_row():
     assert not ok
     assert first_bad == trace_id
 
+    # Put it back. The suite shares one audit database, so a test that leaves the chain
+    # broken makes every later chain assertion fail for a reason that has nothing to do
+    # with what it is testing.
+    db = sqlite3.connect(config.audit_db_path)
+    db.execute("UPDATE decision_traces SET trace_json=? WHERE trace_id=?", (payload, trace_id))
+    db.commit()
+    db.close()
+    assert (await M.audit_logger.verify_chain())[0]
+
 
 @pytest.mark.asyncio
 async def test_cost_does_not_leak_between_sessions_through_the_gateway():
@@ -192,3 +200,63 @@ async def test_cost_does_not_leak_between_sessions_through_the_gateway():
     assert cost.details["session_cost_usd"] == pytest.approx(
         cost.details["estimated_cost_usd"]
     )
+
+
+@pytest.mark.asyncio
+async def test_session_state_expires_rather_than_accumulating():
+    """Both maps were unbounded process-local dicts. State now carries a TTL, so an
+    idle session is dropped rather than retained for the life of the process."""
+    for i in range(20):
+        await M.evaluate(_request(session_id=f"leak-{i}", input_text=f"question {i}"))
+    # One session entry and one cost entry apiece.
+    assert len(M.state_store) == 40
+
+    # Age every key past the idle timeout.
+    expired = time.time() - 1
+    M.state_store._data = {k: (v, expired) for k, (v, _) in M.state_store._data.items()}
+    assert len(M.state_store) == 0
+
+    await M.evaluate(_request(session_id="live"))
+    assert len(M.state_store) == 2
+
+
+@pytest.mark.asyncio
+async def test_cost_and_session_state_share_one_store():
+    """Two stores could disagree about whether a session is still live."""
+    await M.evaluate(_request(session_id="shared"))
+    keys = set(M.state_store._data)
+    assert "aether" not in keys  # the prefix belongs to RedisStore, not this one
+    assert {"session:shared", "cost:shared"} <= keys
+
+
+@pytest.mark.asyncio
+async def test_audit_log_does_not_persist_raw_pii():
+    """The log accumulated every prompt and completion the gateway ever saw, and
+    /api/traces read it back. The spans stay; the characters do not."""
+    response = await M.evaluate(_request(
+        input_text="My SSN is 412-88-7391.",
+        output_text="Reach me at maria.lopez@northwind-trading.com.",
+    ))
+    # The caller still gets the text it sent us.
+    assert "412-88-7391" in response.trace.input_text
+
+    stored = await M.audit_logger.get_trace(response.trace.trace_id)
+    assert "412-88-7391" not in stored.input_text
+    assert "maria.lopez" not in stored.output_text
+    assert "[SSN]" in stored.input_text and "[EMAIL]" in stored.output_text
+
+    # A masked row is still a reviewable one.
+    privacy = [r for r in stored.detection_results if r.category.value == "input_privacy"]
+    assert privacy and privacy[0].flagged_spans
+
+
+@pytest.mark.asyncio
+async def test_audit_chain_still_verifies_over_redacted_rows():
+    """Redaction happens before hashing, so the chain covers what is actually stored."""
+    for i in range(3):
+        await M.evaluate(_request(
+            session_id=f"chain-{i}",
+            output_text="Reach me at maria.lopez@northwind-trading.com.",
+        ))
+    ok, checked, first_bad = await M.audit_logger.verify_chain()
+    assert ok and checked >= 3, (checked, first_bad)
