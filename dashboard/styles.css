@@ -459,11 +459,16 @@ input:focus, select:focus, textarea:focus {
     z-index: 100;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.3s ease;
+    /* Fades rather than snaps, so it cannot be display:none -- but opacity alone leaves
+       a closed modal in the accessibility tree and focusable. visibility takes it out of
+       both, and still animates. */
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 .modal-overlay.active {
     opacity: 1;
     pointer-events: all;
+    visibility: visible;
 }
 .modal-content {
     width: 800px;
@@ -497,6 +502,24 @@ input:focus, select:focus, textarea:focus {
     overflow-y: auto;
     font-size: 0.9rem;
 }
+
+/* The verdict panel. It had no rule at all, so the one thing the operator pressed the
+   button for rendered as loose text under the form and read as part of the page chrome.
+   Same ink and stock as .review-item, plus a decision-coloured edge so the outcome is
+   legible before the words are. */
+.test-result {
+    margin-top: 16px;
+    padding: 14px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-glass);
+    border-left: 3px solid var(--text-muted);
+    animation: slideIn 0.25s ease forwards;
+}
+.test-result:has(.dec-allow)    { border-left-color: var(--dec-allow); }
+.test-result:has(.dec-warn)     { border-left-color: var(--dec-warn); }
+.test-result:has(.dec-redact)   { border-left-color: var(--dec-redact); }
+.test-result:has(.dec-escalate) { border-left-color: var(--dec-escalate); }
+.test-result:has(.dec-block)    { border-left-color: var(--dec-block); }
 
 .hidden { display: none !important; }
 

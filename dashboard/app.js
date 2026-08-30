@@ -46,6 +46,50 @@ function api(path) {
     return `${API_BASE}${path}`;
 }
 
+// --- API key -----------------------------------------------------------------
+// The gateway requires X-API-Key on /api whenever AETHER_API_KEYS is set, because
+// /api/traces returns decision records for every session it has seen.
+//
+// This is a static page, so there is nowhere to hide a secret: the key is held in
+// this browser's localStorage and the operator pastes it in once. That is a key
+// scoped to a person at a console, not a key embedded in a distributed artefact --
+// which is why it is prompted for rather than baked into a meta tag.
+//
+// Resolution: #key= / ?key= (one-time, then stored) → localStorage → none.
+const KEY_STORAGE = 'aether.apiKey';
+
+function resolveApiKey() {
+    const hash = new URLSearchParams(location.hash.replace(/^#/, '')).get('key');
+    const query = new URLSearchParams(location.search).get('key');
+    const fromUrl = hash ?? query;
+    if (fromUrl !== null) {
+        try { localStorage.setItem(KEY_STORAGE, fromUrl); } catch { /* private mode */ }
+        return fromUrl;
+    }
+    try { return localStorage.getItem(KEY_STORAGE) || ''; } catch { return ''; }
+}
+
+let API_KEY = resolveApiKey();
+
+/** Every API request goes through here, so the key is attached in exactly one place. */
+function apiFetch(path, init = {}) {
+    const headers = { ...(init.headers || {}) };
+    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    return fetch(api(path), { ...init, headers });
+}
+
+/** Asks for a key and retries. Called when the gateway answers 401. */
+function promptForApiKey() {
+    const entered = window.prompt(
+        'This gateway requires an API key (X-API-Key).\n\n' +
+        'It is stored in this browser only.'
+    );
+    if (entered === null) return false;
+    API_KEY = entered.trim();
+    try { localStorage.setItem(KEY_STORAGE, API_KEY); } catch { /* private mode */ }
+    return true;
+}
+
 function numberParam(name, fallback) {
     const params = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -95,7 +139,11 @@ let state = {
     traces: [],
     selectedTrace: null,
     charts: { decision: null, risk: null },
-    pollingInterval: null
+    pollingInterval: null,
+    // Which traces already carry a verdict. Seeded from /api/stats on every poll, so it
+    // survives a reload and is the same for every operator; a locally-added id just
+    // keeps the item from flashing back before the next poll confirms it.
+    reviewed: new Set()
 };
 
 // --- Initialization ---
@@ -117,9 +165,19 @@ document.addEventListener('DOMContentLoaded', () => {
 // When the API cannot be reached the console says so and shows nothing.
 async function fetchData() {
     const [statsRes, tracesRes] = await Promise.all([
-        fetch(api('/api/stats')).catch(() => null),
-        fetch(api('/api/traces')).catch(() => null),
+        apiFetch('/api/stats').catch(() => null),
+        apiFetch('/api/traces').catch(() => null),
     ]);
+
+    // Reachable but refusing us is a different problem from unreachable, and telling
+    // an operator "offline" when the gateway is up and rejecting their key sends them
+    // to debug the wrong thing.
+    if (statsRes && statsRes.status === 401) {
+        setConnectionStatus(false, 'Unauthorised — key refused');
+        renderOffline('The gateway rejected this API key.');
+        if (promptForApiKey()) fetchData();
+        return;
+    }
 
     const online = Boolean(statsRes && statsRes.ok && tracesRes && tracesRes.ok);
     setConnectionStatus(online);
@@ -139,7 +197,8 @@ async function fetchData() {
 }
 
 /** Blanks every figure rather than leaving the last good one looking current. */
-function renderOffline() {
+function renderOffline(note) {
+    const message = note || 'No connection to the API.';
     const evalsEl = document.getElementById('stat-evals');
     evalsEl.dataset.value = '0';
     evalsEl.textContent = '—';
@@ -148,10 +207,11 @@ function renderOffline() {
     }
 
     document.getElementById('feed-body').innerHTML =
-        '<tr><td colspan="7" class="empty-state">No connection to the API. ' +
-        'Nothing to show.</td></tr>';
+        `<tr><td colspan="7" class="empty-state">${message} Nothing to show.</td></tr>`;
     document.getElementById('review-queue-container').innerHTML =
-        '<p class="empty-state">No connection to the API.</p>';
+        `<p class="empty-state">${message}</p>`;
+    document.getElementById('session-list').innerHTML =
+        `<p class="empty-state">${message}</p>`;
 
     if (state.charts) {
         for (const chart of Object.values(state.charts)) {
@@ -161,7 +221,7 @@ function renderOffline() {
     }
 }
 
-function setConnectionStatus(connected) {
+function setConnectionStatus(connected, label) {
     const dot = document.getElementById('connection-dot');
     const text = document.getElementById('connection-text');
     if (connected) {
@@ -171,16 +231,28 @@ function setConnectionStatus(connected) {
     } else {
         dot.classList.remove('active');
         dot.style.background = 'var(--dec-block)';
-        text.textContent = 'Offline — no data';
+        // A refused key is not an unreachable gateway, and the badge saying "offline"
+        // while the panel says "rejected" sends an operator to debug the network.
+        text.textContent = label || 'Offline — no data';
     }
 }
 
 // --- UI Updates ---
+// Trace text is whatever some caller sent the gateway, and this console renders traces
+// from every session it has seen -- not just the operator's own. Interpolating that raw
+// makes one caller's output_text executable in another operator's browser.
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
 function updateDashboard(data) {
+    for (const id of data.stats.reviewed_trace_ids || []) state.reviewed.add(id);
     updateStats(data.stats);
     updateCharts(data.stats);
     updateFeed(data.traces);
     updateReviewQueue(data.traces);
+    updateSessions(data.traces);
 }
 
 // Number animation
@@ -212,7 +284,10 @@ function updateStats(stats) {
     const fpr = ((stats.false_positive_count / stats.total_evaluations) * 100).toFixed(2);
     document.getElementById('stat-fpr').textContent = isNaN(fpr) ? 0 : fpr;
     
-    document.getElementById('stat-air').textContent = stats.alert_to_incident_rate || 0;
+    // alert_to_incident_rate is a share in [0,1] and the tile appends a % sign, so the
+    // raw float was both wrong by 100x and 17 digits wide.
+    const air = (stats.alert_to_incident_rate || 0) * 100;
+    document.getElementById('stat-air').textContent = air.toFixed(2);
 }
 
 // --- Charts ---
@@ -301,8 +376,8 @@ function updateFeed(traces) {
         
         tr.innerHTML = `
             <td class="mono-text">${time}</td>
-            <td><span class="badge badge-outline">${trace.use_case}</span></td>
-            <td><span class="badge badge-outline">${trace.action}</span></td>
+            <td><span class="badge badge-outline">${esc(trace.use_case)}</span></td>
+            <td><span class="badge badge-outline">${esc(trace.action)}</span></td>
             <td><span class="badge ${decInfo.class}">${decInfo.label}</span></td>
             <td>
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -321,11 +396,50 @@ function updateFeed(traces) {
     });
 }
 
+// Folded out of the traces already fetched rather than fanning out to /api/sessions/{id}
+// per session: every field shown is on the trace, and N+1 requests on a 5s poll is not.
+function updateSessions(traces) {
+    const container = document.getElementById('session-list');
+    const sessions = new Map();
+
+    // Traces arrive newest first, so the first row seen for a session is its latest turn.
+    for (const trace of traces) {
+        const seen = sessions.get(trace.session_id);
+        if (seen) { seen.turns += 1; continue; }
+        sessions.set(trace.session_id, { turns: 1, latest: trace });
+    }
+
+    const items = [...sessions.entries()].slice(0, 6);
+    if (items.length === 0) {
+        container.innerHTML = '<div class="empty-state">No sessions yet.</div>';
+        return;
+    }
+
+    container.innerHTML = items.map(([id, s]) => {
+        const risk = s.latest.risk_assessment || {};
+        const decInfo = DECISIONS[s.latest.decision] || DECISIONS.ALLOW;
+        return `
+        <div class="session-item">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <span class="mono-text" style="font-size:0.8rem;">${esc(id)}</span>
+                <span class="badge ${decInfo.class}">${decInfo.label}</span>
+            </div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-top:6px;">
+                ${s.turns} turn${s.turns === 1 ? '' : 's'}
+                &middot; exposure ${(risk.session_exposure ?? 0).toFixed(2)}
+                &middot; ${esc(risk.trajectory || 'stable')}
+            </div>
+        </div>`;
+    }).join('');
+}
+
 function updateReviewQueue(traces) {
     const container = document.getElementById('review-queue-container');
     container.innerHTML = '';
     
-    const toReview = traces.filter(t => t.decision === 'ESCALATE').slice(0, 5);
+    const toReview = traces
+        .filter(t => t.decision === 'ESCALATE' && !state.reviewed.has(t.trace_id))
+        .slice(0, 5);
     
     if(toReview.length === 0) {
         container.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px;">No items pending review.</div>';
@@ -337,30 +451,98 @@ function updateReviewQueue(traces) {
         div.className = 'review-item';
         div.innerHTML = `
             <div style="display:flex; justify-content:space-between;">
-                <span class="mono-text">${trace.trace_id}</span>
-                <span class="badge badge-outline">${trace.use_case}</span>
+                <span class="mono-text">${esc(trace.trace_id)}</span>
+                <span class="badge badge-outline">${esc(trace.use_case)}</span>
             </div>
             <div style="font-size:0.85rem; color:var(--text-muted);">
-                Action: ${trace.action} | Risk: ${(trace.risk_assessment?.current_turn_risk||0).toFixed(2)}
+                Action: ${esc(trace.action)} | Risk: ${(trace.risk_assessment?.current_turn_risk||0).toFixed(2)}
             </div>
             <div class="review-actions">
-                <button class="btn btn-approve" onclick="handleReview('${trace.trace_id}', true)">Approve</button>
-                <button class="btn btn-reject" onclick="handleReview('${trace.trace_id}', false)">Reject</button>
+                <button class="btn btn-approve" onclick="handleReview('${esc(trace.trace_id)}', true)">Approve</button>
+                <button class="btn btn-reject" onclick="handleReview('${esc(trace.trace_id)}', false)">Reject</button>
             </div>
         `;
         container.appendChild(div);
     });
 }
 
+/** What the caller actually receives, which is the question the panel exists to answer.
+
+    `corrected_output` is null whenever the pipeline did not rewrite the text -- which is
+    most decisions -- so keying the display off it alone showed nothing at all for ALLOW,
+    WARN and BLOCK. Null means "unchanged", not "nothing", and only BLOCK releases
+    nothing. The submitted text is right here in the form, so no API round trip is needed
+    to show the unchanged case.
+*/
+function releasedOutput(data, submitted) {
+    switch (data.decision) {
+        case 'BLOCK':
+            return { label: 'Released to the caller', text: null,
+                     note: 'Nothing. The action does not happen.' };
+        case 'ESCALATE':
+            return { label: 'Held for a human', text: data.corrected_output || submitted,
+                     note: 'Not released until a reviewer rules on it.' };
+        case 'REDACT':
+            return { label: 'Released, masked', text: data.corrected_output || submitted };
+        default:
+            return { label: 'Released unchanged', text: data.corrected_output || submitted };
+    }
+}
+
+function renderTestResult(data, submitted) {
+    const result = document.getElementById('test-result');
+    const decInfo = DECISIONS[data.decision] || DECISIONS.ALLOW;
+    const scores = (data.trace?.detection_results || [])
+        .map((d) => `${esc(d.category)} ${d.score.toFixed(2)}`)
+        .join('  &middot;  ');
+
+    const out = releasedOutput(data, submitted);
+    const changed = out.text !== null && out.text !== submitted;
+
+    result.innerHTML = `
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px;">
+            <span class="badge ${decInfo.class}">${decInfo.label}</span>
+            <span class="mono-text" style="font-size:0.75rem; color:var(--text-muted);">${esc(data.trace?.trace_id)}</span>
+        </div>
+        <div style="font-size:0.85rem; margin-bottom:10px;">${esc(data.reason)}</div>
+
+        <div style="margin-bottom:10px;">
+            <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin-bottom:4px;">
+                ${esc(out.label)}${changed ? ' &middot; changed' : ''}
+            </div>
+            <div class="mono-text" style="font-size:0.85rem; background:var(--bg-base); border:1px solid var(--border-glass); padding:10px;">
+                ${out.text === null
+                    ? `<span style="color:var(--text-muted);">${esc(out.note)}</span>`
+                    : esc(out.text)}
+            </div>
+            ${out.note && out.text !== null
+                ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-top:4px;">${esc(out.note)}</div>`
+                : ''}
+        </div>
+
+        <div class="mono-text" style="font-size:0.8rem; color:var(--text-muted);">${scores}</div>
+    `;
+    result.classList.remove('hidden');
+    // The panel is the last thing on a long page, so on a short viewport the verdict
+    // landed below the fold and the button looked like it had done nothing.
+    result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 window.handleReview = async (traceId, approved) => {
+    const container = document.getElementById('review-queue-container');
     try {
-        await fetch(api('/api/review'), {
+        const res = await apiFetch('/api/review', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ trace_id: traceId, approved, reviewer_id: 'admin', reason: 'Dashboard review' })
         });
-    } catch {
-        console.log("Review submitted (mock)", traceId, approved);
+        // A 404 or a refused key used to sail through as a recorded verdict.
+        if (!res.ok) throw new Error(`the gateway answered ${res.status}`);
+        state.reviewed.add(traceId);
+    } catch (error) {
+        container.insertAdjacentHTML('afterbegin',
+            `<p class="empty-state">Review not recorded \u2014 ${esc(error.message)}.</p>`);
+        return;
     }
     fetchData(); // Refresh
 };
@@ -375,18 +557,18 @@ function openTraceModal(trace) {
     body.innerHTML = `
         <div style="display:flex; gap:16px; margin-bottom: 20px;">
             <span class="badge ${decInfo.class}">DECISION: ${decInfo.label}</span>
-            <span class="badge badge-outline">${trace.use_case}</span>
-            <span class="badge badge-outline">${trace.action}</span>
+            <span class="badge badge-outline">${esc(trace.use_case)}</span>
+            <span class="badge badge-outline">${esc(trace.action)}</span>
         </div>
         
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-bottom:20px;">
             <div class="glass-panel" style="padding:16px; background:rgba(0,0,0,0.2)">
                 <h3 style="margin-bottom:8px; color:var(--text-muted)">Input</h3>
-                <div style="font-family:var(--font-mono); font-size:0.85rem">${trace.input_text || 'N/A'}</div>
+                <div style="font-family:var(--font-mono); font-size:0.85rem">${esc(trace.input_text) || 'N/A'}</div>
             </div>
             <div class="glass-panel" style="padding:16px; background:rgba(0,0,0,0.2)">
                 <h3 style="margin-bottom:8px; color:var(--text-muted)">Output</h3>
-                <div style="font-family:var(--font-mono); font-size:0.85rem">${trace.output_text || 'N/A'}</div>
+                <div style="font-family:var(--font-mono); font-size:0.85rem">${esc(trace.output_text) || 'N/A'}</div>
             </div>
         </div>
         
@@ -420,27 +602,38 @@ function setupEventListeners() {
             action: document.getElementById('test-action').value,
             input_text: document.getElementById('test-input').value,
             output_text: document.getElementById('test-output').value,
-            session_id: 'sess_test'
+            // A fresh session per submission. This was the fixed id 'sess_test', so every
+            // probe anyone had ever run accumulated into one session's exposure and the
+            // panel eventually escalated everything -- "we are open nine to five" came
+            // back ESCALATE. The panel exists to test a text against an action, not to
+            // replay a conversation; multi-turn behaviour is what the demo script shows.
+            session_id: `sess_test-${Date.now()}`
         };
         
         const btn = e.target.querySelector('button');
+        const result = document.getElementById('test-result');
         btn.textContent = 'Evaluating...';
-        
+        btn.disabled = true;
+
         try {
-            const res = await fetch(api('/api/evaluate'), {
+            const res = await apiFetch('/api/evaluate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)
             });
-            const data = await res.json();
-            // Show result
-            console.log("Eval result", data);
-        } catch {
-            console.log("Mock eval submitted", payload);
-            setTimeout(() => fetchData(), REFRESH_DELAY_MS); // refresh feed
+            // fetch only rejects on a transport failure, so a 401 or a 500 arrives here
+            // as a perfectly good response. Unraised, a refused key rendered as a verdict.
+            if (!res.ok) throw new Error(`the gateway answered ${res.status}`);
+            renderTestResult(await res.json(), payload.output_text);
+            setTimeout(() => fetchData(), REFRESH_DELAY_MS); // pick up the row it just wrote
+        } catch (error) {
+            result.innerHTML = `<p class="empty-state">Evaluation failed \u2014 ${esc(error.message)}.</p>`;
+            result.classList.remove('hidden');
         }
-        
+
         btn.textContent = 'Evaluate';
-        e.target.reset();
+        btn.disabled = false;
+        // The form is deliberately not reset: the panel is for changing one field and
+        // resubmitting, and a verdict you cannot see the input to is not worth much.
     });
 }
