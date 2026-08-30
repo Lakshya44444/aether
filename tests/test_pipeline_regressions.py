@@ -117,6 +117,32 @@ async def test_redact_decision_returns_masked_text():
 
 
 @pytest.mark.asyncio
+async def test_failed_correction_reports_no_corrected_output():
+    """A rejected correction used to return the original text as `corrected_output`.
+
+    The field asserts the pipeline rewrote the text, so a non-null value that equals
+    the submitted text is a false claim -- the demo read it and printed the
+    unmodified output under "correction applied and re-verified". The attempt still
+    belongs on the trace; it just is not a rewrite.
+    """
+    context = ["Closing balance is 12,480.00 USD. Two items are pending and have not settled."]
+    output = (
+        "The closing balance is 12,480.00 USD. "
+        "The two pending items have already cleared and are included in that figure. "
+        "The refund was approved by controller Dana Whitfield, so it can be released."
+    )
+    response = await M.evaluate(_request(
+        use_case=UseCase.FINANCE_AGENT, action=ActionType.EXECUTE_PAYMENT,
+        output_text=output, context_documents=context, session_id="failed-corr",
+    ))
+
+    assert response.decision == Decision.BLOCK
+    correction = response.trace.correction
+    assert correction is not None and correction.attempted and not correction.succeeded
+    assert response.corrected_output is None
+
+
+@pytest.mark.asyncio
 async def test_irreversible_action_is_not_released_on_a_redact():
     """REDACT was absent from both safety-upgrade guards in the policy engine."""
     response = await M.evaluate(_request(

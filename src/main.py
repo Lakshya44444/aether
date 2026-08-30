@@ -412,11 +412,19 @@ async def evaluate(request: EvaluationRequest):
         scores={r.category.value: round(r.score, 3) for r in valid_results},
     )
 
+    # `corrected_output` means "the pipeline rewrote the text", and a caller is entitled
+    # to read a non-null value as text that differs from what it sent. A correction that
+    # was attempted and then rejected by the re-check rewrote nothing, but still set
+    # `correction_result`, so the original text was being returned under a field name
+    # asserting it had been corrected -- the demo printed it as "correction applied and
+    # re-verified". Report the rewrite, not the attempt; the attempt is on the trace.
+    rewritten = correction_result is not None and corrected_output != request.output_text
+
     return EvaluationResponse(
         decision=decision,
         reason=reason,
         trace=trace,
-        corrected_output=corrected_output if correction_result else None
+        corrected_output=corrected_output if rewritten else None
     )
 
 @app.post("/api/evaluate/input", response_model=InputGuardrailResponse)
